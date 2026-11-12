@@ -1,0 +1,10 @@
+# Artefacts Python
+__pycache__/
+*.py[cod]
+
+# Images-disques generees localement par le bonus
+code/data/*.disk.json
+
+# Fichiers temporaires
+*.tmp
+.DS_Store
