@@ -17,33 +17,41 @@ d'inodes.
 
 ## Prerequis
 
-- Python 3.9 ou plus recent ;
-- `make` pour les raccourcis de test (facultatif).
+- Python 3.9 ou plus récent
+- Git pour cloner le dépôt, facultatif si vous téléchargez le ZIP
+- `make` pour lancer les tests, facultatif
 
-Aucune dependance externe n'est requise : le projet s'appuie uniquement sur la
-bibliotheque standard de Python.
+ESINOS utilise uniquement la bibliothèque standard de Python.
 
 ## Installation et lancement
 
-Le code est autonome. Depuis la racine du livrable :
+Si vous découvrez le projet, ouvrez un terminal dans le dossier où vous
+souhaitez télécharger ESINOS. Avec Git, tapez ces deux lignes.
+
+```bash
+git clone https://github.com/ziaaad7/esinos.git
+cd esinos
+```
+
+`git clone` est nécessaire uniquement au premier téléchargement. Si vous avez
+déjà le projet, ouvrez un terminal dans le dossier qui contient `README.md` et
+`code/`. Si vous avez téléchargé le ZIP depuis GitHub, décompressez-le d’abord.
+
+Depuis ce dossier, entrez dans `code/` et lancez le menu interactif.
 
 ```bash
 cd code
 python3 -m esinos
 ```
 
-La commande ouvre le menu interactif. Les saisies sont validees : une valeur
-invalide est expliquee sans interrompre la session.
-
-Pour lancer une presentation reproductible des fonctions principales :
+Dans le menu, choisissez `5` pour lancer la démonstration ou `0` pour quitter.
+Pour lancer directement la démonstration depuis `code/`, utilisez cette commande.
 
 ```bash
-cd code
 python3 -m esinos demo
 ```
 
-La demonstration est volontairement deterministe ; elle constitue un bon fil
-conducteur pour la video et la soutenance.
+La démonstration utilise les mêmes exemples à chaque lancement.
 
 ## Menu et demonstrations
 
@@ -56,12 +64,9 @@ Le menu integre les trois simulateurs.
 | TLB / EAT | L'adresse 75 réutilise la traduction de l'adresse 70. La démo affiche 1 hit sur 8 accès et un EAT de 197,50 ns. |
 | Systeme de fichiers (bonus) | La creation, la lecture et la suppression d'un fichier, puis la table d'inodes et les blocs occupes. |
 
-Exemple de session rapide :
+Exemple de sortie de la démonstration.
 
 ```text
-$ cd code
-$ python3 -m esinos demo
-
 === ESINOS : demonstration integree ===
 [Ordonnancement] ... Gantt et moyennes
 [Memoire] ... traduction et evictions
