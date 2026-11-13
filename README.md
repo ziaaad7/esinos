@@ -98,10 +98,12 @@ resultats.
 
 ### Ordonnancement
 
-Chaque processus contient au minimum son identifiant, son instant d'arrivee,
-sa duree CPU et, pour l'algorithme de priorite, son niveau de priorite. Le
-simulateur conserve les segments d'execution afin de construire le Gantt et
-calcule :
+L’ordonnanceur simule un CPU. Dans le menu `1`, vous pouvez saisir vos propres
+processus au format `PID:arrivee:burst[:priorite]`, séparés par des virgules.
+Par exemple, `P1:0:5:2,P2:1:2:1` définit deux processus. Appuyez sur Entrée
+pour utiliser la liste d’exemple, puis choisissez l’algorithme. Le simulateur
+affiche le Gantt, le temps de fin (CT), ainsi que les temps d’attente et de
+séjour et leurs moyennes.
 
 ```text
 temps de sejour = fin - arrivee
@@ -192,6 +194,6 @@ intermediaires et leurs compromis directement observables.
 
 - `code/` : code source commente ;
 - `README.md` : ce guide d'execution ;
-- `report.pdf` : rapport technique de 3 pages ;
+- `report.pdf` : rapport technique de 4 pages ;
 - `demo.mp4` : vidéo de démonstration à enregistrer par le groupe, caméra
   ouverte. Placer le fichier à la racine, à côté de `report.pdf`.

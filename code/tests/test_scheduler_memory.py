@@ -25,6 +25,7 @@ from esinos.cli import main  # noqa: E402
 from esinos.scheduler import (  # noqa: E402
     Process,
     SchedulerError,
+    format_schedule,
     parse_processes,
     run_scheduler,
 )
@@ -104,6 +105,21 @@ class ProcessAndSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(result.algorithm, "Priority (non preemptif)")
         self.assertEqual(result.average_waiting, 1.0)
+
+    def test_scheduler_hides_response_metrics_and_rejects_retired_policy(self):
+        result = run_scheduler([Process("P1", 0, 2, priority=1)], "priority")
+        rendered = format_schedule(result)
+
+        self.assertIn("AT", rendered)
+        self.assertIn("BT", rendered)
+        self.assertIn("Fin (CT)", rendered)
+        self.assertNotIn("Debut", rendered)
+        self.assertNotIn("Reponse", rendered)
+        self.assertFalse(hasattr(result.metrics[0], "first_start"))
+        self.assertFalse(hasattr(result.metrics[0], "response"))
+        self.assertFalse(hasattr(result, "average_response"))
+        with self.assertRaises(SchedulerError):
+            run_scheduler([Process("P1", 0, 2, priority=1)], "priority-preemptive")
 
 
 class PageReplacementTests(unittest.TestCase):

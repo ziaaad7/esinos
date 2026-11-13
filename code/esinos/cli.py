@@ -120,13 +120,12 @@ def _interactive_scheduler() -> None:
         print("Erreur : %s" % error)
         return
 
-    print("1) FCFS  2) SJF  3) Round Robin  4) Priority  5) Priority preemptif")
+    print("1) FCFS  2) SJF  3) Round Robin  4) Priority")
     choices = {
         "1": "fcfs",
         "2": "sjf",
         "3": "rr",
         "4": "priority",
-        "5": "priority-preemptive",
     }
     selection = _ask("Algorithme", "3")
     algorithm = choices.get(selection)
@@ -410,7 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler.add_argument(
         "--algorithm",
         required=True,
-        choices=["fcfs", "sjf", "rr", "priority", "priority-preemptive"],
+        choices=["fcfs", "sjf", "rr", "priority"],
     )
     scheduler.add_argument("--quantum", type=int, help="quantum obligatoire pour rr")
 

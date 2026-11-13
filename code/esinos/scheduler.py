@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Deque, Iterable, List, Optional, Sequence, Tuple
 
 
 class SchedulerError(ValueError):
@@ -51,17 +51,15 @@ class GanttSlice:
 
 @dataclass(frozen=True)
 class ProcessMetrics:
-    """Mesures usuelles associees a un processus termine."""
+    """Mesures de fin, de sejour et d'attente d'un processus termine."""
 
     pid: str
     arrival: int
     burst: int
     priority: int
-    first_start: int
     completion: int
     waiting: int
     turnaround: int
-    response: int
 
 
 @dataclass(frozen=True)
@@ -80,10 +78,6 @@ class ScheduleResult:
     @property
     def average_turnaround(self) -> float:
         return sum(item.turnaround for item in self.metrics) / len(self.metrics)
-
-    @property
-    def average_response(self) -> float:
-        return sum(item.response for item in self.metrics) / len(self.metrics)
 
 
 def _validate_processes(processes: Iterable[Process]) -> List[Process]:
@@ -116,14 +110,12 @@ def _build_result(
     algorithm: str,
     processes: Sequence[Process],
     timeline: List[GanttSlice],
-    first_start: Dict[str, int],
-    completion: Dict[str, int],
+    completion: dict[str, int],
     quantum: Optional[int] = None,
 ) -> ScheduleResult:
     metrics: List[ProcessMetrics] = []
     for process in processes:
         end = completion[process.pid]
-        start = first_start[process.pid]
         turnaround = end - process.arrival
         waiting = turnaround - process.burst
         metrics.append(
@@ -132,11 +124,9 @@ def _build_result(
                 arrival=process.arrival,
                 burst=process.burst,
                 priority=process.priority,
-                first_start=start,
                 completion=end,
                 waiting=waiting,
                 turnaround=turnaround,
-                response=start - process.arrival,
             )
         )
     return ScheduleResult(algorithm, tuple(timeline), tuple(metrics), quantum)
@@ -147,8 +137,7 @@ def _run_non_preemptive(processes: Sequence[Process], algorithm: str) -> Schedul
 
     pending = list(processes)
     timeline: List[GanttSlice] = []
-    first_start: Dict[str, int] = {}
-    completion: Dict[str, int] = {}
+    completion: dict[str, int] = {}
     clock = 0
 
     while pending:
@@ -169,14 +158,13 @@ def _run_non_preemptive(processes: Sequence[Process], algorithm: str) -> Schedul
             selected = min(ready, key=lambda item: (item.priority, item.arrival, item.pid))
             display_name = "Priority (non preemptif)"
 
-        first_start[selected.pid] = clock
         end = clock + selected.burst
         _record_slice(timeline, selected.pid, clock, end)
         clock = end
         completion[selected.pid] = clock
         pending.remove(selected)
 
-    return _build_result(display_name, processes, timeline, first_start, completion)
+    return _build_result(display_name, processes, timeline, completion)
 
 
 def _run_round_robin(processes: Sequence[Process], quantum: int) -> ScheduleResult:
@@ -187,8 +175,7 @@ def _run_round_robin(processes: Sequence[Process], quantum: int) -> ScheduleResu
     remaining = {process.pid: process.burst for process in processes}
     ready: Deque[Process] = deque()
     timeline: List[GanttSlice] = []
-    first_start: Dict[str, int] = {}
-    completion: Dict[str, int] = {}
+    completion: dict[str, int] = {}
     index = 0
     clock = 0
 
@@ -202,8 +189,6 @@ def _run_round_robin(processes: Sequence[Process], quantum: int) -> ScheduleResu
                 index += 1
 
         current = ready.popleft()
-        if current.pid not in first_start:
-            first_start[current.pid] = clock
         duration = min(quantum, remaining[current.pid])
         end = clock + duration
         _record_slice(timeline, current.pid, clock, end)
@@ -221,45 +206,7 @@ def _run_round_robin(processes: Sequence[Process], quantum: int) -> ScheduleResu
         else:
             completion[current.pid] = clock
 
-    return _build_result("Round Robin", processes, timeline, first_start, completion, quantum)
-
-
-def _run_priority_preemptive(processes: Sequence[Process]) -> ScheduleResult:
-    """Priority preemptif, utile pour illustrer explicitement la preemption."""
-
-    remaining = {process.pid: process.burst for process in processes}
-    timeline: List[GanttSlice] = []
-    first_start: Dict[str, int] = {}
-    completion: Dict[str, int] = {}
-    clock = 0
-
-    while len(completion) < len(processes):
-        ready = [
-            process
-            for process in processes
-            if process.arrival <= clock and remaining[process.pid] > 0
-        ]
-        if not ready:
-            future_arrivals = [
-                process.arrival
-                for process in processes
-                if remaining[process.pid] > 0 and process.arrival > clock
-            ]
-            next_arrival = min(future_arrivals)
-            _record_slice(timeline, "IDLE", clock, next_arrival)
-            clock = next_arrival
-            continue
-
-        current = min(ready, key=lambda item: (item.priority, item.arrival, item.pid))
-        if current.pid not in first_start:
-            first_start[current.pid] = clock
-        _record_slice(timeline, current.pid, clock, clock + 1)
-        remaining[current.pid] -= 1
-        clock += 1
-        if remaining[current.pid] == 0:
-            completion[current.pid] = clock
-
-    return _build_result("Priority (preemptif)", processes, timeline, first_start, completion)
+    return _build_result("Round Robin", processes, timeline, completion, quantum)
 
 
 def run_scheduler(
@@ -267,9 +214,8 @@ def run_scheduler(
 ) -> ScheduleResult:
     """Simule un ordonnanceur et retourne le Gantt et les metriques.
 
-    ``algorithm`` accepte ``fcfs``, ``sjf``, ``rr``, ``priority`` et
-    ``priority-preemptive``. SJF et Priority sont non preemptifs sauf lorsque
-    la variante explicite ``priority-preemptive`` est demandee.
+    ``algorithm`` accepte ``fcfs``, ``sjf``, ``rr`` et ``priority``. SJF et
+    Priority sont non preemptifs ; Round Robin reste preemptif par quantum.
     """
 
     process_list = _validate_processes(processes)
@@ -280,8 +226,6 @@ def run_scheduler(
         return _run_non_preemptive(process_list, "sjf")
     if normalized in {"priority", "priorite"}:
         return _run_non_preemptive(process_list, "priority")
-    if normalized in {"priority-preemptive", "priorite-preemptive"}:
-        return _run_priority_preemptive(process_list)
     if normalized in {"rr", "round-robin", "roundrobin"}:
         if quantum is None:
             raise SchedulerError("Round Robin exige un quantum.")
@@ -351,20 +295,18 @@ def format_schedule(result: ScheduleResult) -> str:
             item.arrival,
             item.burst,
             item.priority,
-            item.first_start,
             item.completion,
             item.waiting,
             item.turnaround,
-            item.response,
         )
         for item in result.metrics
     ]
     table = _format_table(
-        ["PID", "Arr", "CPU", "Prio", "Debut", "Fin", "Attente", "Sejour", "Reponse"],
+        ["PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Sejour"],
         rows,
     )
-    averages = (
-        "Moyennes : attente = %.2f, sejour = %.2f, reponse = %.2f"
-        % (result.average_waiting, result.average_turnaround, result.average_response)
+    averages = "Moyennes : attente = %.2f, sejour = %.2f" % (
+        result.average_waiting,
+        result.average_turnaround,
     )
     return "%s\nGantt : %s\n\n%s\n%s" % (title, format_gantt(result.timeline), table, averages)
