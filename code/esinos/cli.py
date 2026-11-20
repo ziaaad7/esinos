@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from math import isfinite
 from tempfile import TemporaryDirectory
 
 from .filesystem import initialiser, creer_fichier, lire_fichier
@@ -8,6 +9,9 @@ from .filesystem import supprimer_fichier, lister_inodes
 from .filesystem import etat_disque, reformater
 from .memory import remplacer, traduire, calculer_eat
 from .scheduler import ordonnancer
+from .affichage import gantt_texte, tableau_texte, explication_cpu
+from .pedagogie import explications_remplacement, explications_traduction
+from .carte_disque import carte_blocs, explication_fichier
 
 
 # Ces valeurs sont proposées quand tu appuies sur Entrée.
@@ -54,11 +58,13 @@ def lire_processus(texte):
 
 def liste_entiers(texte):
     valeurs = []
-    for morceau in texte.split(","):
+    for morceau in texte.replace(",", " ").split():
         nombre = int(morceau)
         if nombre < 0:
             raise ValueError("Les numéros et les adresses commencent à zéro.")
         valeurs.append(nombre)
+    if not valeurs:
+        raise ValueError("Saisis au moins un numéro.")
     return valeurs
 
 
@@ -75,90 +81,340 @@ def lire_table(texte):
     return table
 
 
-def afficher_cpu(processus, algorithme, quantum=2):
+def titre(texte):
+    print("\n" + texte)
+    print("-" * len(texte))
+
+
+def demander_choix(question, valeurs, defaut):
+    while True:
+        choix = lire_avec_defaut(question, defaut).lower()
+        if choix in valeurs:
+            return choix
+        print("Choisis parmi :", ", ".join(valeurs))
+
+
+def demander_entier(question, defaut, minimum=0):
+    while True:
+        try:
+            valeur = int(lire_avec_defaut(question, str(defaut)))
+            if minimum is None or valeur >= minimum:
+                return valeur
+            print(f"La valeur doit être au moins {minimum}.")
+        except ValueError:
+            print("Saisis un nombre entier.")
+
+
+def demander_temps(question, defaut):
+    while True:
+        try:
+            valeur = float(lire_avec_defaut(question, str(defaut)).replace(",", "."))
+            if isfinite(valeur) and valeur >= 0:
+                return valeur
+        except ValueError:
+            pass
+        print("Saisis un temps fini, positif ou nul.")
+
+
+def demander_liste(question, defaut):
+    while True:
+        try:
+            return liste_entiers(lire_avec_defaut(question, defaut))
+        except ValueError as erreur:
+            print("Erreur :", erreur)
+
+
+def choisir_mode():
+    print("1 Résumé | 2 Expliqué | 3 Pas à pas")
+    choix = demander_choix("Affichage", ("1", "2", "3"), "1")
+    modes = {"1": "resume", "2": "explique", "3": "pasapas"}
+    return modes[choix]
+
+
+def parcourir_etapes(explications, mode):
+    for explication in explications:
+        print("\n" + explication)
+        if mode == "pasapas":
+            suite = input("Entrée : suite | t : tout afficher | 0 : retour : ")
+            if suite.strip().lower() == "t":
+                mode = "explique"
+            elif suite.strip() == "0":
+                return False
+    return True
+
+
+def afficher_cpu(processus, algorithme, quantum=2, mode="resume"):
     gantt, lignes = ordonnancer(processus, algorithme, quantum)
-    print("\n", algorithme.upper())
-    print("Gantt :", end=" ")
-    for index in range(len(gantt)):
-        nom, debut, fin = gantt[index]
-        print(f"{nom} [{debut}-{fin}]", end="")
-        if index < len(gantt) - 1:
-            print(" -> ", end="")
-    print()
-    print("PID | AT | BT | Prio | Fin (CT) | Attente | Séjour")
+    titre(algorithme.upper())
+    if mode != "resume":
+        textes = explication_cpu(processus, gantt, algorithme, quantum)
+        if not parcourir_etapes(textes, mode):
+            return
+    print(gantt_texte(gantt))
+    print(tableau_texte(
+        ("PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Séjour"), lignes
+    ))
     attente_totale = 0
     sejour_total = 0
-    for nom, arrivee, duree, priorite, fin, attente, sejour in lignes:
-        print(nom, arrivee, duree, priorite, fin, attente, sejour, sep=" | ")
-        attente_totale += attente
-        sejour_total += sejour
+    for ligne in lignes:
+        attente_totale += ligne[5]
+        sejour_total += ligne[6]
     print(f"Attente moyenne : {attente_totale / len(lignes):.2f}")
     print(f"Séjour moyen : {sejour_total / len(lignes):.2f}")
 
 
-def afficher_remplacement(pages, cadres, algorithme):
+def comparer_cpu(processus, quantum=2):
+    titre("COMPARAISON CPU - MÊMES PROCESSUS")
+    resultats = []
+    for algorithme in ("fcfs", "sjf", "rr", "priorite"):
+        gantt, lignes = ordonnancer(processus, algorithme, quantum)
+        print("\n" + algorithme.upper())
+        print(gantt_texte(gantt))
+        print(tableau_texte(
+            ("PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Séjour"), lignes
+        ))
+        attente = 0
+        sejour = 0
+        for ligne in lignes:
+            attente += ligne[5]
+            sejour += ligne[6]
+        resultats.append((algorithme.upper(), f"{attente / len(lignes):.2f}",
+                          f"{sejour / len(lignes):.2f}"))
+    print(tableau_texte(("Algorithme", "Attente moyenne", "Séjour moyen"), resultats))
+    print(f"Round Robin utilise un quantum de {quantum}.")
+
+
+def afficher_remplacement(pages, cadres, algorithme, mode="resume"):
     defauts, trace = remplacer(pages, cadres, algorithme)
-    print("Étape | Page | Résultat | Victime | Cadres")
+    titre(f"{algorithme.upper()} - {cadres} CADRES")
+    if mode != "resume":
+        textes = explications_remplacement(pages, cadres, algorithme, trace)
+        if not parcourir_etapes(textes, mode):
+            return
+    lignes = []
     etape = 1
     for page, hit, victime, etat_cadres in trace:
         resultat = "défaut"
         if hit:
             resultat = "hit"
-        print(etape, page, resultat, victime, etat_cadres, sep=" | ")
+        lignes.append((etape, page, resultat, victime, str(etat_cadres)))
         etape += 1
+    print(tableau_texte(("Étape", "Page", "Résultat", "Victime", "Cadres"), lignes))
     print(f"{algorithme.upper()} : {defauts} défauts")
 
 
+def comparer_remplacement(pages, cadres):
+    resultats = []
+    for algorithme in ("fifo", "lru", "optimal"):
+        defauts, trace = remplacer(pages, cadres, algorithme)
+        taux = 0
+        if pages:
+            taux = 100 * defauts / len(pages)
+        resultats.append((algorithme.upper(), defauts, len(pages) - defauts,
+                          f"{taux:.2f} %"))
+    titre(f"COMPARAISON MÉMOIRE - {cadres} CADRES")
+    print(tableau_texte(("Algorithme", "Défauts", "Hits", "Taux de défaut"), resultats))
+
+
 def afficher_traduction(adresses, taille, table, capacite,
-                        temps_tlb=10, temps_memoire=100):
+                        temps_tlb=10, temps_memoire=100, mode="resume"):
     lignes, hits = traduire(adresses, taille, table, capacite)
-    print("Adresse | Page | Déplacement | Cadre | Physique | TLB")
+    eat = calculer_eat(hits, len(lignes), temps_tlb, temps_memoire)
+    titre("TRADUCTION, TLB ET EAT")
+    if mode != "resume":
+        textes = explications_traduction(adresses, taille, table, capacite, lignes)
+        if not parcourir_etapes(textes, mode):
+            return
+    tableau = []
     for adresse, page, deplacement, cadre, physique, hit in lignes:
         resultat = "miss"
         if hit:
             resultat = "hit"
         if physique is None:
             resultat = "miss et défaut de page"
-        print(adresse, page, deplacement, cadre, physique, resultat, sep=" | ")
+        tableau.append((adresse, page, deplacement, cadre, physique, resultat))
+    print(tableau_texte(("Adresse", "Page", "Déplacement", "Cadre", "Physique", "TLB"),
+                        tableau))
     print(f"Hits TLB : {hits}/{len(lignes)}")
-    eat = calculer_eat(hits, len(lignes), temps_tlb, temps_memoire)
+    if mode != "resume":
+        taux = hits / len(lignes)
+        print(f"Chemin hit : {temps_tlb:g} + {temps_memoire:g} = "
+              f"{temps_tlb + temps_memoire:g} ns")
+        print(f"Chemin miss : {temps_tlb:g} + 2 x {temps_memoire:g} = "
+              f"{temps_tlb + 2 * temps_memoire:g} ns")
+        print(f"EAT = {taux:.3f} x coût hit + {1 - taux:.3f} x coût miss")
+        print("Le délai de chargement d'une page depuis le disque est exclu.")
     print(f"EAT : {eat:.2f} ns")
 
 
 def afficher_inodes(chemin):
-    print("Inode | Nom | Taille en octets | Blocs")
+    lignes = []
     inodes = lister_inodes(chemin)
     for index in range(len(inodes)):
         inode = inodes[index]
         if inode is None:
-            print(index + 1, "libre", sep=" | ")
+            lignes.append((index + 1, "libre", None, None, None))
         else:
-            print(inode["numero"], inode["nom"], inode["taille"],
-                  inode["blocs"], sep=" | ")
+            lignes.append((inode["numero"], "occupé", inode["nom"],
+                           inode["taille"], str(inode["blocs"])))
+    print(tableau_texte(("Inode", "État", "Nom", "Octets", "Blocs"), lignes))
+
+
+def afficher_fichiers(chemin):
+    lignes = []
+    for inode in lister_inodes(chemin):
+        if inode is not None:
+            lignes.append((inode["numero"], inode["nom"], inode["taille"],
+                           str(inode["blocs"])))
+    print(tableau_texte(("Inode", "Nom", "Octets", "Blocs"), lignes))
+
+
+def afficher_etat(chemin):
+    etat = etat_disque(chemin)
+    print(f"Blocs utilisés : {etat['blocs_utilises']}/{etat['nombre_blocs']}")
+    print(f"Inodes utilisés : {etat['inodes_utilises']}/{etat['nombre_inodes']}")
+    print(f"Taille d'un bloc : {etat['taille_bloc']} octets")
+
+
+def saisir_processus():
+    nombre = demander_entier("Nombre de processus", 4, 1)
+    processus = []
+    noms = []
+    for index in range(nombre):
+        while True:
+            nom = lire_avec_defaut(f"Nom du processus {index + 1}", f"P{index + 1}")
+            if nom.upper() != "IDLE" and nom not in noms:
+                break
+            print("Ce nom est réservé ou déjà utilisé.")
+        arrivee = demander_entier("Instant d'arrivée AT", 0, 0)
+        duree = demander_entier("Durée CPU BT", 1, 1)
+        priorite = demander_entier("Priorité (petit nombre = plus urgente)", 0, None)
+        processus.append({"nom": nom, "arrivee": arrivee,
+                          "duree": duree, "priorite": priorite})
+        noms.append(nom)
+    return processus
+
+
+def menu_cpu():
+    processus = lire_processus(PROCESSUS)
+    while True:
+        titre("ORDONNANCEMENT CPU")
+        lignes = []
+        for p in processus:
+            lignes.append((p["nom"], p["arrivee"], p["duree"], p["priorite"]))
+        print(tableau_texte(("PID", "AT", "BT", "Prio"), lignes))
+        print("1 FCFS | 2 SJF | 3 Round Robin | 4 Priority | 5 Comparer")
+        print("6 Saisir des processus | 7 Exemple | 0 Retour")
+        choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5", "6", "7"), "1")
+        if choix == "0":
+            return
+        if choix == "6":
+            processus = saisir_processus()
+        elif choix == "7":
+            processus = lire_processus(PROCESSUS)
+        else:
+            quantum = 2
+            if choix in ("3", "5"):
+                quantum = demander_entier("Quantum Round Robin", 2, 1)
+            if choix == "5":
+                comparer_cpu(processus, quantum)
+            else:
+                algorithmes = {"1": "fcfs", "2": "sjf", "3": "rr", "4": "priorite"}
+                afficher_cpu(processus, algorithmes[choix], quantum, choisir_mode())
+
+
+def menu_remplacement():
+    pages = liste_entiers(PAGES)
+    cadres = 3
+    while True:
+        titre("REMPLACEMENT DE PAGES")
+        print("Références :", pages)
+        print("Nombre de cadres :", cadres)
+        print("1 FIFO | 2 LRU | 3 Optimal | 4 Comparer")
+        print("5 Modifier les pages et les cadres | 6 Exemple | 0 Retour")
+        choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5", "6"), "1")
+        if choix == "0":
+            return
+        if choix == "5":
+            texte = " ".join(map(str, pages))
+            pages = demander_liste("Pages (espaces ou virgules)", texte)
+            cadres = demander_entier("Nombre de cadres", cadres, 1)
+        elif choix == "6":
+            pages, cadres = liste_entiers(PAGES), 3
+        elif choix == "4":
+            comparer_remplacement(pages, cadres)
+        else:
+            algorithmes = {"1": "fifo", "2": "lru", "3": "optimal"}
+            afficher_remplacement(pages, cadres, algorithmes[choix], choisir_mode())
+
+
+def menu_traduction():
+    adresses = liste_entiers(ADRESSES)
+    taille, table, capacite = 64, lire_table(TABLE), 2
+    temps_tlb, temps_memoire = 10, 100
+    while True:
+        titre("TRADUCTION D'ADRESSES")
+        print("Adresses :", adresses)
+        print(f"Taille de page : {taille} octets | Capacité TLB : {capacite}")
+        print("Table page -> cadre :", table)
+        print("1 Lancer | 2 Modifier les paramètres | 3 Exemple | 0 Retour")
+        choix = demander_choix("Choix", ("0", "1", "2", "3"), "1")
+        if choix == "0":
+            return
+        if choix == "1":
+            afficher_traduction(adresses, taille, table, capacite,
+                                temps_tlb, temps_memoire, choisir_mode())
+        elif choix == "2":
+            adresses = demander_liste("Adresses", " ".join(map(str, adresses)))
+            taille = demander_entier("Taille de page en octets", taille, 1)
+            paires = []
+            for page, cadre in table.items():
+                paires.append(f"{page}:{cadre}")
+            while True:
+                try:
+                    texte = lire_avec_defaut("Table page:cadre", ",".join(paires))
+                    table = lire_table(texte)
+                    break
+                except ValueError as erreur:
+                    print("Erreur :", erreur)
+            capacite = demander_entier("Capacité du TLB (0 = désactivé)", capacite, 0)
+            temps_tlb = demander_temps("Temps TLB en ns", temps_tlb)
+            temps_memoire = demander_temps("Temps mémoire en ns", temps_memoire)
+        else:
+            adresses, taille = liste_entiers(ADRESSES), 64
+            table, capacite = lire_table(TABLE), 2
+            temps_tlb, temps_memoire = 10, 100
 
 
 def menu_disque():
     if not os.path.exists(IMAGE):
         initialiser(IMAGE)
     while True:
-        print("\n1 Créer | 2 Lire | 3 Supprimer | 4 Lister | 5 Inodes")
-        print("6 État disque | 7 Reformater | 0 Retour")
-        choix = input("Choix : ").strip()
+        titre("SYSTÈME DE FICHIERS À INODES")
+        print("Image :", IMAGE)
+        print("1 Créer | 2 Lire | 3 Supprimer | 4 Lister | 5 Inodes")
+        print("6 État | 7 Reformater | 8 Carte des blocs | 9 Suivre un fichier")
+        print("0 Retour")
+        choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5",
+                                        "6", "7", "8", "9"), "4")
         try:
             if choix == "0":
                 return
-            elif choix == "1":
+            if choix == "1":
                 nom = input("Nom : ").strip()
                 texte = input("Texte : ")
                 inode = creer_fichier(IMAGE, nom, texte)
-                print("Blocs alloués", inode["blocs"])
+                print(f"Fichier créé dans l'inode {inode['numero']}.")
+                print(explication_fichier(IMAGE, nom))
             elif choix == "2":
                 print(lire_fichier(IMAGE, input("Nom : ").strip()))
             elif choix == "3":
                 nom = input("Nom : ").strip()
-                if input("Supprimer ce fichier ? [oui/non] : ") == "oui":
+                if input("Supprimer ce fichier ? [oui/non] : ").strip().lower() == "oui":
                     supprimer_fichier(IMAGE, nom)
-                    print("Fichier supprimé.")
+                    print("Fichier supprimé. Ses blocs et son inode sont libres.")
+                else:
+                    print("Action annulée.")
             elif choix == "4":
                 afficher_fichiers(IMAGE)
             elif choix == "5":
@@ -167,122 +423,99 @@ def menu_disque():
                 afficher_etat(IMAGE)
             elif choix == "7":
                 reponse = input("Effacer tous les fichiers virtuels ? [oui/non] : ")
-                if reponse == "oui":
+                if reponse.strip().lower() == "oui":
                     reformater(IMAGE)
                     print("Disque reformaté.")
-            else:
-                print("Choix inconnu.")
+                else:
+                    print("Action annulée.")
+            elif choix == "8":
+                print(carte_blocs(IMAGE))
+            elif choix == "9":
+                print(explication_fichier(IMAGE, input("Nom : ").strip()))
         except (OSError, ValueError) as erreur:
             print("Erreur :", erreur)
 
 
-def demonstration():
+def demonstration(mode="resume"):
+    titre("ESINOS - DÉMONSTRATION")
     processus = lire_processus(PROCESSUS)
-    for algorithme in ("fcfs", "sjf", "rr", "priorite"):
-        afficher_cpu(processus, algorithme)
+    comparer_cpu(processus, 2)
+    if mode != "resume":
+        afficher_cpu(processus, "rr", 2, mode)
 
     pages = liste_entiers(PAGES)
-    afficher_remplacement(pages, 3, "fifo")
-    for algorithme in ("lru", "optimal"):
-        defauts, _ = remplacer(pages, 3, algorithme)
-        print(f"{algorithme.upper()} : {defauts} défauts")
+    afficher_remplacement(pages, 3, "fifo", mode)
+    comparer_remplacement(pages, 3)
+    afficher_traduction(liste_entiers(ADRESSES), 64, lire_table(TABLE), 2,
+                        mode=mode)
 
-    afficher_traduction(liste_entiers(ADRESSES), 64, lire_table(TABLE), 2)
-
-    # Le dossier temporaire est nettoyé à la sortie de with.
     with TemporaryDirectory() as dossier:
-        chemin = os.path.join(dossier, "demo.json")
+        chemin = os.path.join(dossier, "demo.disk.json")
         initialiser(chemin, 12, 16, 4)
         creer_fichier(chemin, "notes.txt",
                       "Bonjour depuis le disque virtuel ESINOS.")
+        titre("BONUS - INODES ET BLOCS")
         afficher_inodes(chemin)
+        print(explication_fichier(chemin, "notes.txt"))
         print("Lecture :", lire_fichier(chemin, "notes.txt"))
+        print(carte_blocs(chemin))
         supprimer_fichier(chemin, "notes.txt")
+        print("Après suppression :")
         afficher_inodes(chemin)
+        print(carte_blocs(chemin))
 
 
 def menu():
     while True:
-        print("\nESINOS - MINI-NOYAU SIMULÉ")
-        print("1 CPU | 2 Remplacement | 3 Traduction | 4 Disque")
+        titre("ESINOS - MINI-NOYAU SIMULÉ")
+        print("1 Ordonnancement CPU")
+        print("2 Remplacement de pages")
+        print("3 Traduction, TLB et EAT")
+        print("4 Système de fichiers à inodes")
         print("5 Démonstration | 0 Quitter")
-        choix = input("Choix : ").strip()
+        choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5"), "5")
         try:
             if choix == "0":
                 return
-            elif choix == "1":
-                texte = lire_avec_defaut("Nom:arrivée:durée:priorité", PROCESSUS)
-                processus = lire_processus(texte)
-                print("1) FCFS  2) SJF  3) Round Robin  4) Priority")
-                politique = lire_avec_defaut("Algorithme (numéro ou nom)", "1")
-                politique = politique.lower().strip()
-                choix_cpu = {"1": "fcfs", "2": "sjf", "3": "rr", "4": "priorite"}
-                politique = choix_cpu.get(politique, politique)
-                if politique == "priority":
-                    politique = "priorite"
-                quantum = 2
-                if politique == "rr":
-                    quantum = int(lire_avec_defaut("Quantum", "2"))
-                afficher_cpu(processus, politique, quantum)
+            if choix == "1":
+                menu_cpu()
             elif choix == "2":
-                pages = liste_entiers(lire_avec_defaut("Pages", PAGES))
-                cadres = int(lire_avec_defaut("Nombre de cadres", "3"))
-                print("1) FIFO  2) LRU  3) Optimal")
-                politique = lire_avec_defaut("Algorithme (numéro ou nom)", "1")
-                choix_memoire = {"1": "fifo", "2": "lru", "3": "optimal"}
-                politique = choix_memoire.get(politique, politique)
-                afficher_remplacement(pages, cadres, politique)
+                menu_remplacement()
             elif choix == "3":
-                adresses = liste_entiers(lire_avec_defaut("Adresses", ADRESSES))
-                taille = int(lire_avec_defaut("Taille de page", "64"))
-                table = lire_table(lire_avec_defaut("Table page:cadre", TABLE))
-                capacite = int(lire_avec_defaut("Capacité du TLB", "2"))
-                temps_tlb = float(lire_avec_defaut("Temps TLB en ns", "10"))
-                temps_memoire = float(lire_avec_defaut("Temps mémoire en ns", "100"))
-                afficher_traduction(adresses, taille, table, capacite,
-                                    temps_tlb, temps_memoire)
+                menu_traduction()
             elif choix == "4":
                 menu_disque()
             elif choix == "5":
                 demonstration()
-            else:
-                print("Choix inconnu.")
         except (OSError, ValueError) as erreur:
             print("Erreur :", erreur)
-
-
-def afficher_fichiers(chemin):
-    print("Inode | Nom | Taille en octets | Blocs")
-    for inode in lister_inodes(chemin):
-        if inode is not None:
-            print(inode["numero"], inode["nom"], inode["taille"],
-                  inode["blocs"], sep=" | ")
-
-
-def afficher_etat(chemin):
-    for nom, valeur in etat_disque(chemin).items():
-        print(nom, valeur, sep=" : ")
 
 
 def arguments():
     # argparse lit les options du Terminal et produit aussi l'aide --help.
     parser = argparse.ArgumentParser(description="ESINOS - mini-noyau simulé")
-    parser.add_argument("--version", action="version", version="ESINOS 2.0.0")
+    parser.add_argument("--version", action="version", version="ESINOS 2.1.0")
     commandes = parser.add_subparsers(dest="commande")
     commandes.add_parser("interactive", help="ouvrir le menu")
-    commandes.add_parser("demo", help="lancer les exemples")
+    demo = commandes.add_parser("demo", help="lancer les exemples")
+    demo.add_argument("--explain", action="store_true",
+                      help="expliquer les décisions")
 
     cpu = commandes.add_parser("scheduler", help="simuler le CPU")
     cpu.add_argument("--processes", required=True)
     cpu.add_argument("--algorithm", required=True,
-                     choices=["fcfs", "sjf", "rr", "priority"])
+                     choices=["fcfs", "sjf", "rr", "priority", "priorite"])
     cpu.add_argument("--quantum", type=int)
+    cpu.add_argument("--explain", action="store_true",
+                         help="expliquer les décisions")
 
     memoire = commandes.add_parser("memory", help="remplacer des pages")
     memoire.add_argument("--references", required=True)
     memoire.add_argument("--frames", required=True, type=int)
     memoire.add_argument("--algorithm", required=True,
                          choices=["fifo", "lru", "optimal"])
+    memoire.add_argument("--explain", action="store_true",
+                         help="expliquer les décisions")
 
     traduction = commandes.add_parser("translate", help="traduire des adresses")
     traduction.add_argument("--page-size", required=True, type=int)
@@ -291,6 +524,8 @@ def arguments():
     traduction.add_argument("--tlb-size", type=int, default=2)
     traduction.add_argument("--tlb-time", type=float, default=10)
     traduction.add_argument("--memory-time", type=float, default=100)
+    traduction.add_argument("--explain", action="store_true",
+                         help="expliquer les décisions")
 
     disque = commandes.add_parser("fs", help="gérer le disque virtuel")
     disque.add_argument("--disk", default="data/esinos.disk.json")
@@ -309,6 +544,9 @@ def arguments():
     actions.add_parser("list")
     actions.add_parser("inodes")
     actions.add_parser("status")
+    actions.add_parser("map", help="voir les blocs libres et occupés")
+    parcours = actions.add_parser("explain", help="suivre un fichier dans le disque")
+    parcours.add_argument("name")
     return parser
 
 
@@ -318,7 +556,7 @@ def main(argv=None):
         if choix.commande is None or choix.commande == "interactive":
             menu()
         elif choix.commande == "demo":
-            demonstration()
+            demonstration("explique" if choix.explain else "resume")
         elif choix.commande == "scheduler":
             politique = choix.algorithm
             if politique == "priority":
@@ -326,14 +564,17 @@ def main(argv=None):
             quantum = choix.quantum
             if politique == "rr" and quantum is None:
                 raise ValueError("Round Robin exige --quantum.")
-            afficher_cpu(lire_processus(choix.processes), politique, quantum)
+            mode = "explique" if choix.explain else "resume"
+            afficher_cpu(lire_processus(choix.processes), politique, quantum, mode)
         elif choix.commande == "memory":
             afficher_remplacement(liste_entiers(choix.references),
-                                   choix.frames, choix.algorithm)
+                                   choix.frames, choix.algorithm,
+                                   "explique" if choix.explain else "resume")
         elif choix.commande == "translate":
             afficher_traduction(liste_entiers(choix.addresses), choix.page_size,
                                 lire_table(choix.page_table), choix.tlb_size,
-                                choix.tlb_time, choix.memory_time)
+                                choix.tlb_time, choix.memory_time,
+                                "explique" if choix.explain else "resume")
         elif choix.commande == "fs":
             chemin = choix.disk
             if choix.action == "init":
@@ -353,6 +594,10 @@ def main(argv=None):
                 afficher_inodes(chemin)
             elif choix.action == "status":
                 afficher_etat(chemin)
+            elif choix.action == "map":
+                print(carte_blocs(chemin))
+            elif choix.action == "explain":
+                print(explication_fichier(chemin, choix.name))
         return 0
     except (OSError, ValueError) as erreur:
         print("Erreur :", erreur, file=sys.stderr)

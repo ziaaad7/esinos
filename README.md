@@ -1,177 +1,219 @@
-# ESINOS - mini-noyau simulé
+# ESINOS 2.1.0 — mini-noyau simulé
 
-ESINOS est un simulateur pédagogique écrit en Python avec des fonctions,
-des listes et des dictionnaires. Il permet de saisir ses données et
-d'observer les décisions d'ordonnancement, de pagination et d'allocation
-de fichiers. Python 3.9 ou plus récent suffit. Le code utilise la
-bibliothèque standard.
+ESINOS est un simulateur pédagogique de systèmes d’exploitation écrit en
+Python 3. Il rend visibles l’ordonnancement CPU, la mémoire virtuelle et le
+bonus officiel de système de fichiers à inodes, avec des fonctions, des
+boucles, des listes et des dictionnaires de la bibliothèque standard.
 
-## Télécharger et lancer
+Le programme simule des mécanismes du cours dans l’espace utilisateur. Ce
+n’est ni un noyau binaire ni un système d’exploitation installé sur la machine.
 
-Au premier téléchargement avec Git, ouvrez le Terminal dans le dossier
-où vous souhaitez installer le projet.
+## Installer et lancer
 
-```bash
+Python 3.9 ou plus récent suffit. Depuis le dossier où vous voulez cloner le
+dépôt, lancez les commandes suivantes.
+
+~~~bash
 git clone https://github.com/ziaaad7/esinos.git
 cd esinos
 cd code
 python3 -m esinos
-```
+~~~
 
-Si vous avez téléchargé un ZIP, décompressez-le et ouvrez son dossier
-avant de taper `cd code`. Si le projet se trouve déjà dans Documents
-sur votre Mac, utilisez directement ces commandes.
+Avec un ZIP, décompressez-le, ouvrez le dossier du projet puis tapez `cd code`.
+Un ZIP téléchargé depuis GitHub peut se nommer `esinos-main` : adaptez la
+commande précédente au nom réel du dossier.
 
-```bash
+Si le dépôt est déjà présent dans Documents sur votre Mac, ouvrez directement
+le même projet.
+
+~~~bash
 cd ~/Documents/esinos/code
 python3 -m esinos
-```
+python3 -m esinos --version
+~~~
 
-Le menu propose les parcours suivants.
+## Menu et jeux de données préchargés
 
-| Choix | Simulation |
+Les sous-menus CPU, mémoire et traduction commencent avec un jeu de données
+préchargé. Le sous-menu disque ouvre son image configurée et l’initialise si
+elle n’existe pas. Appuyer sur Entrée garde une valeur proposée entre crochets.
+
+| Choix | Parcours |
 | --- | --- |
-| 1 | CPU avec FCFS, SJF, Round Robin et Priority |
-| 2 | Remplacement de pages avec FIFO, LRU et Optimal |
-| 3 | Traduction d'adresses, TLB et EAT |
-| 4 | Bonus officiel du disque virtuel à inodes |
+| 1 | Ordonnancement CPU |
+| 2 | Remplacement de pages |
+| 3 | Traduction d’adresses, TLB et EAT |
+| 4 | Système de fichiers à inodes |
 | 5 | Démonstration complète |
 | 0 | Quitter |
 
-Appuyez sur Entrée pour garder une valeur proposée entre crochets.
-Dans les choix CPU et mémoire, sélectionnez un algorithme par son numéro
-ou par son nom. La démo peut aussi être lancée directement depuis `code/`.
+### Modes Résumé, Expliqué et Pas à pas
 
-```bash
-python3 -m esinos demo
-```
+Après le choix d’un algorithme CPU, mémoire ou traduction, le programme propose
+les modes Résumé, Expliqué et Pas à pas.
 
-## Ordonnancement CPU
+- Résumé affiche le Gantt ou le tableau final.
+- Expliqué déroule automatiquement les décisions qui ont produit le résultat.
+- Pas à pas affiche une décision puis attend une commande. Entrée montre
+  l’étape suivante, t affiche le reste et 0 revient au sous-menu.
 
-Un processus contient son nom, son instant d'arrivée AT, sa durée CPU BT
-et sa priorité numérique. Dans le menu, vous pouvez conserver les
-processus proposés ou saisir une liste comme celle-ci.
+Les explications sont construites à partir des traces calculées. Elles ne
+modifient donc ni les algorithmes ni leurs résultats.
 
-```text
-P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2
-```
+### 1. Ordonnancement CPU
 
-La priorité est facultative dans une commande et vaut alors zéro.
-FCFS fait passer le premier arrivé. SJF prend la plus courte durée parmi
-les processus prêts. Priority choisit le plus petit numéro de priorité.
-Ces trois politiques sont non préemptives. Round Robin partage le CPU
-avec un quantum positif. Les arrivées à la fin d'une tranche sont ajoutées
-à la file avant la réinsertion du processus interrompu.
+Le sous-menu commence avec quatre processus préchargés. Les choix 1 à 4 lancent
+FCFS, SJF, Round Robin et Priority. Le choix 5 compare les quatre politiques
+sur les mêmes processus et demande le quantum de Round Robin. Le choix 6 ouvre
+un assistant de saisie, processus par processus, pour le nom, AT, BT et la
+priorité. Le choix 7 restaure l’exemple.
 
-Le Gantt contient les tranches d'exécution et les périodes `IDLE`.
-Le tableau donne PID, AT, BT, Prio, Fin (CT), Attente et Séjour.
+Les colonnes finales sont PID, AT, BT, Prio, Fin (CT), Attente et Séjour.
+FCFS, SJF et Priority sont non préemptifs. Round Robin utilise un quantum
+positif et une file d’attente.
 
-```text
-séjour = fin - arrivée
-attente = séjour - durée CPU
-```
+~~~text
+séjour = CT - AT
+attente = séjour - BT
+~~~
 
-Le code du calcul se trouve dans `code/esinos/scheduler.py`.
-Un processus y est un dictionnaire. `ordonnancer` renvoie le Gantt
-et les lignes du tableau. La file de Round Robin est une liste.
+### 2. Remplacement de pages
 
-## Mémoire virtuelle
+Le jeu préchargé contient la suite 7,0,1,2,0,3,0,4,2,3,0,3,2 avec trois
+cadres. Les choix 1, 2 et 3 lancent FIFO, LRU et Optimal. Le choix 4 compare
+les trois résultats. Le choix 5 personnalise la suite et le nombre de cadres.
+Le choix 6 rétablit l’exemple.
 
-`code/esinos/memory.py` contient les fonctions de remplacement,
-de traduction et de calcul de l'EAT.
+Chaque trace indique le hit ou défaut, la victime éventuelle et les cadres. En
+mode expliqué, FIFO justifie la page chargée la première, LRU la page utilisée
+la moins récemment et Optimal la prochaine utilisation la plus lointaine.
 
-- `remplacer` suit une suite de pages et montre les cadres, les hits,
-  les défauts et la victime de chaque accès.
-- `traduire` traite une suite d'adresses avec une table page-cadre et
-  un TLB à remplacement LRU. Le cache vit pendant cette suite.
-- `calculer_eat` fait la moyenne des coûts d'accès selon le taux
-  de hit. Le modèle exclut le délai de chargement depuis le stockage.
+### 3. Traduction, TLB et EAT
 
-```text
+Le jeu préchargé utilise des pages de 64 octets, une table page→cadre et un TLB
+de capacité 2. Le choix 1 lance le calcul. Le choix 2 modifie les adresses, la
+taille de page, la table, la capacité du TLB et les deux temps d’accès. Le
+choix 3 rétablit l’exemple.
+
+~~~text
 page = adresse // taille_page
 déplacement = adresse % taille_page
-physique = cadre * taille_page + déplacement
+adresse physique = cadre * taille_page + déplacement
 EAT = temps_TLB + (2 - taux_hit) * temps_mémoire
-```
+~~~
 
-Un cadre 0 est valide. Une page absente de la table donne une adresse
-physique à `None`. Cet accès compte comme un miss dans le ratio TLB.
+Le TLB emploie LRU. Le cadre 0 est valide. Une page absente donne cadre=None et
+une adresse physique None. Elle compte comme un miss pour l’EAT, dont la
+pénalité de chargement depuis le stockage est exclue.
 
-## Bonus officiel des fichiers à inodes
+### 4. Bonus officiel du système de fichiers
 
-Le module `code/esinos/filesystem.py` conserve les fichiers virtuels dans
-une image disque JSON. Les inodes et les blocs sont représentés avec
-des listes et des dictionnaires. Les opérations sont des fonctions
-comme `creer_fichier`, `lire_fichier` et `supprimer_fichier`.
+Le menu travaille sur une image JSON persistante. Il propose créer, lire,
+supprimer, lister, afficher les inodes, afficher l’état et reformater. Le choix
+8 affiche une carte des blocs libres et occupés. Le choix 9 suit un fichier
+depuis son inode vers ses blocs et son contenu UTF-8 reconstitué.
 
-Les images ESINOS existantes restent lisibles. Les écritures utilisent
-le format ESINOS version 1 et ses blocs en Base64. Le menu charge le
-disque à `code/data/esinos.disk.json`. L'initialisation refuse
-d'écraser une image. Le reformatage dans le menu demande une confirmation.
+L’initialisation ne remplace pas une image existante. Le reformatage demande une
+confirmation. Les blocs sont stockés au format ESINOS version 1 avec leur
+contenu encodé en Base64.
 
-## Commandes reproductibles
+## Démonstration reproductible
 
-Ces exemples s'exécutent depuis le dossier `code/`.
+Depuis code, la démonstration résumée exécute les mêmes scénarios que le menu.
 
-```bash
-python3 -m esinos scheduler --algorithm rr --quantum 2 --processes "P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2"
-python3 -m esinos memory --algorithm fifo --frames 3 --references "7,0,1,2,0,3,0,4,2,3,0,3,2"
-python3 -m esinos translate --page-size 64 --page-table "0:5,1:2,2:7,3:1" --addresses "5,70,75,130,5,195,70,260"
-python3 -m esinos fs --disk data/exemple.disk.json --blocks 12 --block-size 16 --inodes 4 init
+~~~bash
+python3 -m esinos demo
+~~~
+
+La variante suivante active automatiquement le mode Expliqué. Elle détaille
+Round Robin, FIFO et la traduction sans demander de touche à chaque étape. Le
+bonus affiche aussi le parcours de notes.txt et sa carte de blocs.
+
+~~~bash
+python3 -m esinos demo --explain
+~~~
+
+| Mesure | Résultat |
+| --- | --- |
+| Attente / séjour moyens FCFS | 4,75 / 8,75 |
+| Attente / séjour moyens SJF | 4,00 / 8,00 |
+| Attente / séjour moyens RR, quantum 2 | 5,00 / 9,00 |
+| Attente / séjour moyens Priority | 5,50 / 9,50 |
+| Défauts FIFO / LRU / Optimal | 10 / 9 / 7 |
+| TLB et EAT | 1 hit sur 8 et 197,50 ns |
+| Fichier de démo | inode 1, blocs 0, 1, 2 et 40 octets |
+
+La démo crée son image dans un dossier temporaire. Le menu interactif garde son
+image entre les lancements.
+
+## Commandes terminal réelles
+
+Les commandes suivantes s’exécutent depuis code. L’option --explain est
+disponible pour demo, scheduler, memory et translate.
+
+~~~bash
+python3 -m esinos scheduler --algorithm rr --quantum 2 \
+  --processes "P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2" --explain
+
+python3 -m esinos memory --algorithm fifo --frames 3 \
+  --references "7,0,1,2,0,3,0,4,2,3,0,3,2" --explain
+
+python3 -m esinos translate --page-size 64 --page-table "0:5,1:2,2:7,3:1" \
+  --addresses "5,70,75,130,5,195,70,260" --tlb-size 2 --explain
+~~~
+
+Voici un petit disque de travail, puis les commandes pour le visualiser et
+suivre un fichier.
+
+~~~bash
+python3 -m esinos fs --disk data/exemple.disk.json \
+  --blocks 12 --block-size 16 --inodes 4 init
 python3 -m esinos fs --disk data/exemple.disk.json create notes.txt "Bonjour ESINOS"
-python3 -m esinos fs --disk data/exemple.disk.json inodes
+python3 -m esinos fs --disk data/exemple.disk.json map
+python3 -m esinos fs --disk data/exemple.disk.json explain notes.txt
 python3 -m esinos fs --disk data/exemple.disk.json read notes.txt
 python3 -m esinos fs --disk data/exemple.disk.json delete notes.txt
-```
+~~~
 
-## Résultats de la démonstration
+Les autres actions de disque sont list, inodes et status.
 
-| Algorithme ou mesure | Résultat |
-| --- | --- |
-| FCFS, attente / séjour moyens | 4,75 / 8,75 |
-| SJF, attente / séjour moyens | 4,00 / 8,00 |
-| Round Robin q=2, attente / séjour moyens | 5,00 / 9,00 |
-| Priority, attente / séjour moyens | 5,50 / 9,50 |
-| Défauts FIFO / LRU / Optimal | 10 / 9 / 7 |
-| Traduction de 75 | Adresse 139, hit TLB |
-| TLB et EAT | 1 hit sur 8 et 197,50 ns |
-| Fichier de démo | 40 octets, inode 1 et blocs 0, 1, 2 |
+## Organisation du code
 
-La démo crée une image temporaire pour ses fichiers. Le menu conserve
-l'image interactive après la fermeture du programme.
-
-## Vérifier le code
-
-Depuis `code/`, lancez la suite de tests.
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Avec `make`, les raccourcis `make run`, `make demo` et `make test`
-appellent les mêmes commandes.
-
-## Organisation
-
-```text
+~~~text
 code/
   esinos/
     __main__.py      lance cli.main
-    cli.py           menu, commandes et affichage
-    scheduler.py     fonctions des quatre politiques CPU
-    memory.py        remplacement, traduction, TLB et EAT
-    filesystem.py    image, inodes et blocs
-  tests/             vérification des algorithmes et commandes
+    cli.py           menu, sous-menus, commandes et démonstration
+    scheduler.py     FCFS, SJF, RR, Priority et mesures
+    memory.py        FIFO, LRU, Optimal, TLB et EAT
+    filesystem.py    image JSON, inodes, blocs et Base64
+    affichage.py     Gantt, tableaux ASCII et explications CPU
+    pedagogie.py     explications des traces mémoire et TLB
+    carte_disque.py  carte des blocs et parcours d’un fichier
+  tests/             tests des algorithmes, traces et commandes
   Makefile           raccourcis facultatifs
-```
+~~~
 
-Le programme calcule sur des données simulées. Il utilise un CPU, des
-durées abstraites et un seul burst par processus. Le coût de changement
-de contexte est omis. Le disque est prévu pour une session de modification
-à la fois.
+affichage.py transforme le Gantt et les mesures en texte lisible, puis produit
+les explications CPU. pedagogie.py reconstruit les états avant et après des
+traces FIFO, LRU, Optimal et TLB. carte_disque.py lit l’image par l’interface
+publique du système de fichiers pour construire une carte ou un parcours, sans
+modifier le JSON.
 
-## Livrables
+Les modules de calcul gardent une syntaxe accessible aux débutants. Les
+résultats sont des données simulées, pas des appels au noyau de l’ordinateur.
 
-Le dépôt contient `code/`, ce `README.md` et `report.pdf`.
-Le groupe enregistre sa vidéo caméra ouverte et ajoute `demo.mp4`
-à la racine pour la remise.
+## Vérifier le projet et remettre
+
+Depuis code, exécutez les tests.
+
+~~~bash
+python3 -m unittest discover -s tests -v
+make run
+make demo
+make test
+~~~
+
+Le dépôt contient code, ce README.md et report.pdf. Le groupe ajoute demo.mp4 à
+la racine pour la remise. La vidéo doit être enregistrée caméra ouverte.
