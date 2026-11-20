@@ -1,757 +1,495 @@
-"""Mini systeme de fichiers persistant pour le bonus ESINOS.
+"""Mini disque ESINOS, ecrit avec des fonctions, listes et dictionnaires.
 
-Ce module ne touche jamais au systeme de fichiers de l'hote, a l'exception
-d'une image disque JSON fournie par l'appelant.  L'image contient une table
-d'inodes fixe, un bitmap implicite (un bloc vaut ``None`` lorsqu'il est libre)
-et les donnees de chaque bloc encodees en Base64.  Le Base64 permet de couper
-un texte UTF-8 a n'importe quel octet sans corrompre les caracteres accentues.
-
-Exemple minimal::
-
-    fs = VirtualFileSystem("data/esinos.disk.json", create=True)
-    fs.create("notes.txt", "Bonjour ESINOS")
-    print(fs.read("notes.txt"))
-    print(fs.inode_table())
-
-La persistance est atomique : une image temporaire est ecrite puis renommee
-seulement lorsque son contenu est complet.
+Le programme manipule une image interne tres simple : les noms des cles sont
+en francais et les inodes occupent directement une case de la liste. Au moment
+de sauvegarder, cette image est traduite vers le format JSON canonique du
+projet ESINOS (schema version 1, blocs Base64). Ainsi, l'atelier peut ouvrir
+une ancienne image francaise en hexadecimal et une image creee par le projet
+publie, puis les sauvegarder dans un format compatible.
 """
-
-from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 
-__all__ = [
-    "VirtualFileSystem",
-    "MiniFileSystem",
-    "FileSystem",
-    "Inode",
-    "FileSystemError",
-    "DiskImageError",
-    "DiskNotFormattedError",
-    "DiskAlreadyExistsError",
-    "InvalidFileNameError",
-    "InvalidContentError",
-    "FileAlreadyExistsError",
-    "VirtualFileNotFoundError",
-    "DiskFullError",
-    "InodeTableFullError",
-]
+SCHEMA = "esinos-mini-filesystem"
+VERSION = 1
+NOM_SIMPLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
-class FileSystemError(Exception):
-    """Erreur de base du mini systeme de fichiers."""
+def _verifier_entier_positif(valeur, etiquette):
+    """Vérifie qu'une taille est un entier strictement positif."""
+    if isinstance(valeur, bool) or not isinstance(valeur, int):
+        raise ValueError(etiquette + " doit etre un entier.")
+    if valeur <= 0:
+        raise ValueError(etiquette + " doit etre strictement positif.")
 
 
-class DiskImageError(FileSystemError):
-    """L'image disque est absente, invalide ou incoherente."""
-
-
-class DiskNotFormattedError(DiskImageError):
-    """Aucune image disque formatee n'existe encore a cet emplacement."""
-
-
-class DiskAlreadyExistsError(FileSystemError):
-    """Une initialisation exclusive refuse d'ecraser une image existante."""
-
-
-class InvalidFileNameError(FileSystemError):
-    """Le nom de fichier ne respecte pas le format du simulateur."""
-
-
-class InvalidContentError(FileSystemError):
-    """Le contenu fourni ne peut pas etre stocke dans le disque simule."""
-
-
-class FileAlreadyExistsError(FileSystemError):
-    """Un fichier virtuel du meme nom existe deja."""
-
-
-class VirtualFileNotFoundError(FileSystemError):
-    """Le fichier virtuel demande n'existe pas."""
-
-
-class DiskFullError(FileSystemError):
-    """Le disque simule ne contient pas assez de blocs libres."""
-
-
-class InodeTableFullError(FileSystemError):
-    """La table d'inodes fixe est pleine."""
-
-
-@dataclass(frozen=True)
-class Inode:
-    """Entree immutable de la table d'inodes."""
-
-    inode_id: int
-    name: str
-    size: int
-    blocks: Tuple[int, ...]
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Retourne une representation JSON de l'inode."""
-
-        return {
-            "inode_id": self.inode_id,
-            "name": self.name,
-            "size": self.size,
-            "blocks": list(self.blocks),
-        }
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Inode":
-        """Construit un inode sans masquer les erreurs de schema."""
-
-        if not isinstance(raw, Mapping):
-            raise DiskImageError("Une entree de la table d'inodes doit etre un objet JSON.")
-
-        blocks = raw.get("blocks")
-        if not isinstance(blocks, list):
-            raise DiskImageError("Le champ 'blocks' d'un inode doit etre une liste.")
-
-        return cls(
-            inode_id=raw.get("inode_id"),
-            name=raw.get("name"),
-            size=raw.get("size"),
-            blocks=tuple(blocks),
+def _verifier_nom(nom):
+    """Applique les memes limites de nom que le projet publie."""
+    if not isinstance(nom, str) or NOM_SIMPLE.fullmatch(nom) is None:
+        raise ValueError(
+            "Nom invalide : utilise 1 a 64 lettres, chiffres, points, _ ou -."
         )
 
 
-class VirtualFileSystem:
-    """Systeme de fichiers a allocation directe sur une image JSON.
+def _encoder_bloc(octets):
+    """Transforme des octets en texte Base64 pour pouvoir les mettre en JSON."""
+    return base64.b64encode(octets).decode("ascii")
 
-    Les fichiers sont volontairement petits : chaque inode contient la liste
-    de ses blocs directs.  Cela rend l'allocation, la liberation des blocs et
-    la table d'inodes faciles a expliquer pendant la soutenance.
 
-    Args:
-        path: Chemin de l'image-disque JSON persistante.
-        block_size: Taille d'un bloc en octets lors de la creation d'une image.
-        block_count: Nombre total de blocs lors de la creation d'une image.
-        inode_count: Taille fixe de la table d'inodes lors de la creation.
-        create: Cree et formate une nouvelle image si elle est absente. Sans
-            cette option, l'absence de disque leve ``DiskNotFormattedError``.
-    """
+def _decoder_bloc(texte):
+    """Relit un bloc Base64 et produit une erreur lisible si le JSON est faux."""
+    if not isinstance(texte, str) or texte == "":
+        raise ValueError("Un bloc occupe doit contenir du texte Base64 non vide.")
+    try:
+        return base64.b64decode(texte.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError, binascii.Error):
+        raise ValueError("Un bloc de l'image n'est pas du Base64 valide.")
 
-    SCHEMA = "esinos-mini-filesystem"
-    SCHEMA_VERSION = 1
-    _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-    def __init__(
-        self,
-        path: Union[str, Path],
-        *,
-        block_count: int = 64,
-        block_size: int = 64,
-        inode_count: int = 16,
-        create: bool = False,
-    ) -> None:
-        self.disk_path = Path(path)
-        self._validate_configuration(block_size, block_count, inode_count)
+def _verifier_image(disque):
+    """Verifie les liens entre table d'inodes, blocs et contenu texte."""
+    if not isinstance(disque, dict):
+        raise ValueError("Le disque doit etre un dictionnaire.")
+    if "taille_bloc" not in disque or "blocs" not in disque:
+        raise ValueError("Il manque la taille ou les blocs du disque.")
+    if "inodes" not in disque:
+        raise ValueError("Il manque la table d'inodes du disque.")
 
-        self.block_size = block_size
-        self.block_count = block_count
-        self.max_inodes = inode_count
-        self._inodes: Dict[str, Inode] = {}
-        self._blocks: List[Optional[str]] = []
+    taille_bloc = disque["taille_bloc"]
+    blocs = disque["blocs"]
+    inodes = disque["inodes"]
+    _verifier_entier_positif(taille_bloc, "La taille de bloc")
+    if not isinstance(blocs, list) or not blocs:
+        raise ValueError("La liste des blocs doit etre une liste non vide.")
+    if not isinstance(inodes, list) or not inodes:
+        raise ValueError("La table d'inodes doit etre une liste non vide.")
 
-        if self.disk_path.exists():
-            self.reload()
-        elif create:
-            self.format()
-        else:
-            raise DiskNotFormattedError(
-                "L'image disque n'existe pas. Utilisez create=True ou formattez-la : "
-                + str(self.disk_path)
-            )
+    # Tous les blocs non vides doivent deja etre du Base64 et tenir dans un cadre.
+    for numero in range(len(blocs)):
+        bloc = blocs[numero]
+        if bloc is not None:
+            contenu = _decoder_bloc(bloc)
+            if len(contenu) == 0 or len(contenu) > taille_bloc:
+                raise ValueError("La taille d'un bloc occupe est incoherente.")
 
-    @classmethod
-    def initialize_new(
-        cls,
-        path: Union[str, Path],
-        *,
-        block_count: int = 64,
-        block_size: int = 64,
-        inode_count: int = 16,
-    ) -> "VirtualFileSystem":
-        """Cree une nouvelle image uniquement si aucun chemin ne l'occupe.
-
-        Cette methode est destinee a ``esinos fs init``. Contrairement a
-        ``VirtualFileSystem(..., create=True)``, elle ne charge ni ne reformate
-        une image existante. Le lien physique ``os.link`` publie le fichier
-        temporaire de facon atomique et echoue si un autre processus vient de
-        creer la meme image entre-temps.
-        """
-
-        cls._validate_configuration(block_size, block_count, inode_count)
-        filesystem = cls.__new__(cls)
-        filesystem.disk_path = Path(path)
-        filesystem.block_size = block_size
-        filesystem.block_count = block_count
-        filesystem.max_inodes = inode_count
-        filesystem._inodes = {}
-        filesystem._blocks = [None] * block_count
-
-        payload = filesystem._serialize_state(filesystem._inodes, filesystem._blocks)
-        filesystem._exclusive_create(payload)
-        return filesystem
-
-    # ------------------------------------------------------------------
-    # API publique : operations de fichiers
-    # ------------------------------------------------------------------
-    def format(self) -> None:
-        """Reinitialise le disque, tous les inodes et tous les blocs.
-
-        Cette operation est destructive pour l'image virtuelle uniquement.
-        """
-
-        self._replace_state({}, [None] * self.block_count)
-
-    format_disk = format
-
-    def create(self, name: str, content: str = "") -> Inode:
-        """Cree un fichier avec son contenu initial et retourne son inode."""
-
-        self._validate_name(name)
-        self._validate_content(content)
-        if name in self._inodes:
-            raise FileAlreadyExistsError("Le fichier existe deja : " + name)
-        if len(self._inodes) >= self.max_inodes:
-            raise InodeTableFullError("La table d'inodes est pleine.")
-
-        inode_id = self._next_free_inode_id()
-        inodes = dict(self._inodes)
-        blocks = list(self._blocks)
-        inode = self._store_content(
-            inode_id=inode_id,
-            name=name,
-            content=content,
-            old_blocks=(),
-            blocks=blocks,
-        )
-        inodes[name] = inode
-        self._replace_state(inodes, blocks)
-        return inode
-
-    create_file = create
-
-    def read(self, name: str) -> str:
-        """Lit et retourne le contenu UTF-8 d'un fichier virtuel."""
-
-        inode = self.get_inode(name)
-        return self._read_inode_content(inode, self._blocks)
-
-    read_file = read
-
-    def write(self, name: str, content: str, *, append: bool = False) -> Inode:
-        """Remplace le contenu d'un fichier ou y ajoute ``content``.
-
-        La reecriture libere d'abord les anciens blocs dans une copie de
-        travail. Ainsi, le fichier peut reutiliser ses propres blocs meme si
-        le disque ne possede aucun autre bloc libre.
-        """
-
-        self._validate_name(name)
-        self._validate_content(content)
-        if not isinstance(append, bool):
-            raise InvalidContentError("L'option append doit valoir True ou False.")
-
-        previous = self._inodes.get(name)
-        if previous is None:
-            raise VirtualFileNotFoundError("Fichier introuvable : " + name)
-
-        if append:
-            content = self._read_inode_content(previous, self._blocks) + content
-
-        inodes = dict(self._inodes)
-        blocks = list(self._blocks)
-        replacement = self._store_content(
-            inode_id=previous.inode_id,
-            name=name,
-            content=content,
-            old_blocks=previous.blocks,
-            blocks=blocks,
-        )
-        inodes[name] = replacement
-        self._replace_state(inodes, blocks)
-        return replacement
-
-    write_file = write
-
-    def delete(self, name: str) -> None:
-        """Supprime un fichier et libere tous ses blocs alloues."""
-
-        inode = self.get_inode(name)
-        inodes = dict(self._inodes)
-        blocks = list(self._blocks)
-
-        for block_index in inode.blocks:
-            blocks[block_index] = None
-        del inodes[name]
-        self._replace_state(inodes, blocks)
-
-    delete_file = delete
-
-    def exists(self, name: str) -> bool:
-        """Indique si ``name`` est present dans le repertoire racine."""
-
-        self._validate_name(name)
-        return name in self._inodes
-
-    def get_inode(self, name: str) -> Inode:
-        """Retourne l'inode immutable d'un fichier, ou leve une erreur."""
-
-        self._validate_name(name)
-        inode = self._inodes.get(name)
+    noms = []
+    numeros = []
+    blocs_utilises = []
+    for position_inode in range(len(inodes)):
+        inode = inodes[position_inode]
         if inode is None:
-            raise VirtualFileNotFoundError("Fichier introuvable : " + name)
-        return inode
+            continue
+        if not isinstance(inode, dict):
+            raise ValueError("Un inode doit etre un dictionnaire ou None.")
+        champs = ["numero", "nom", "taille", "blocs"]
+        for champ in champs:
+            if champ not in inode:
+                raise ValueError("Il manque " + champ + " dans un inode.")
 
-    def list_files(self) -> List[Inode]:
-        """Liste les fichiers par numero d'inode, pour un affichage stable."""
+        numero_inode = inode["numero"]
+        nom = inode["nom"]
+        taille = inode["taille"]
+        liste_blocs = inode["blocs"]
+        if numero_inode != position_inode + 1:
+            raise ValueError("Le numero d'inode ne correspond pas a sa case.")
+        if isinstance(numero_inode, bool) or not isinstance(numero_inode, int):
+            raise ValueError("Le numero d'inode doit etre un entier.")
+        if numero_inode in numeros:
+            raise ValueError("Deux inodes ont le meme numero.")
+        numeros.append(numero_inode)
+        _verifier_nom(nom)
+        if nom in noms:
+            raise ValueError("Deux inodes utilisent le meme nom.")
+        noms.append(nom)
+        if isinstance(taille, bool) or not isinstance(taille, int) or taille < 0:
+            raise ValueError("La taille d'un inode est invalide.")
+        if not isinstance(liste_blocs, list):
+            raise ValueError("La liste de blocs d'un inode est invalide.")
 
-        return sorted(self._inodes.values(), key=lambda inode: inode.inode_id)
+        nombre_attendu = (taille + taille_bloc - 1) // taille_bloc
+        if len(liste_blocs) != nombre_attendu:
+            raise ValueError("Le nombre de blocs ne correspond pas a la taille du fichier.")
 
-    ls = list_files
+        contenu_fichier = b""
+        for position_bloc in range(len(liste_blocs)):
+            numero_bloc = liste_blocs[position_bloc]
+            if isinstance(numero_bloc, bool) or not isinstance(numero_bloc, int):
+                raise ValueError("Le numero de bloc doit etre un entier.")
+            if numero_bloc < 0 or numero_bloc >= len(blocs):
+                raise ValueError("Un inode pointe en dehors du disque.")
+            if numero_bloc in blocs_utilises:
+                raise ValueError("Un bloc ne peut appartenir qu'a un seul inode.")
+            blocs_utilises.append(numero_bloc)
 
-    def inode_table(self) -> List[Dict[str, Any]]:
-        """Retourne les entrees occupees et libres de la table d'inodes.
+            bloc = blocs[numero_bloc]
+            if bloc is None:
+                raise ValueError("Un inode pointe vers un bloc libre.")
+            morceau = _decoder_bloc(bloc)
+            if position_bloc < len(liste_blocs) - 1 and len(morceau) != taille_bloc:
+                raise ValueError("Seul le dernier bloc d'un fichier peut etre incomplet.")
+            contenu_fichier += morceau
 
-        Chaque ligne fournit ``inode_id``, ``allocated``, ``name``, ``size``
-        et ``blocks``. Les entrees libres sont conservees pour rendre visible
-        le principe de la table d'inodes fixe lors de la demonstration.
-        """
+        if len(contenu_fichier) != taille:
+            raise ValueError("La taille d'un fichier ne correspond pas a ses blocs.")
+        try:
+            contenu_fichier.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("Le contenu d'un fichier n'est pas du texte UTF-8.")
 
-        by_id = {inode.inode_id: inode for inode in self._inodes.values()}
-        rows: List[Dict[str, Any]] = []
-        for inode_id in range(1, self.max_inodes + 1):
-            inode = by_id.get(inode_id)
-            rows.append(
-                {
-                    "inode_id": inode_id,
-                    "allocated": inode is not None,
-                    "name": inode.name if inode else None,
-                    "size": inode.size if inode else 0,
-                    "blocks": list(inode.blocks) if inode else [],
-                }
-            )
-        return rows
+    for numero in range(len(blocs)):
+        if blocs[numero] is not None and numero not in blocs_utilises:
+            raise ValueError("Un bloc occupe n'est reference par aucun inode.")
 
-    table_inodes = inode_table
 
-    def status(self) -> Dict[str, Any]:
-        """Retourne des compteurs utiles au menu de demonstration."""
+def _charger_image_canonique(image):
+    """Convertit le schema publie anglais vers le dictionnaire francais interne."""
+    if image.get("schema") != SCHEMA or image.get("version") != VERSION:
+        raise ValueError("Cette image ESINOS n'utilise pas le schema version 1.")
+    champs = ["block_size", "block_count", "max_inodes", "blocks", "inodes"]
+    for champ in champs:
+        if champ not in image:
+            raise ValueError("Il manque " + champ + " dans l'image ESINOS.")
 
-        used_blocks = sum(block is not None for block in self._blocks)
-        return {
-            "disk_path": str(self.disk_path),
-            "block_size": self.block_size,
-            "block_count": self.block_count,
-            "used_blocks": used_blocks,
-            "free_blocks": self.block_count - used_blocks,
-            "max_inodes": self.max_inodes,
-            "used_inodes": len(self._inodes),
-            "free_inodes": self.max_inodes - len(self._inodes),
+    taille_bloc = image["block_size"]
+    nombre_blocs = image["block_count"]
+    nombre_inodes = image["max_inodes"]
+    blocs = image["blocks"]
+    inodes_source = image["inodes"]
+    _verifier_entier_positif(taille_bloc, "block_size")
+    _verifier_entier_positif(nombre_blocs, "block_count")
+    _verifier_entier_positif(nombre_inodes, "max_inodes")
+    if not isinstance(blocs, list) or len(blocs) != nombre_blocs:
+        raise ValueError("Le nombre de blocs de l'image ESINOS est incoherent.")
+    if not isinstance(inodes_source, list) or len(inodes_source) > nombre_inodes:
+        raise ValueError("La table d'inodes ESINOS est incoherente.")
+
+    disque = {
+        "taille_bloc": taille_bloc,
+        "blocs": list(blocs),
+        "inodes": [None] * nombre_inodes,
+    }
+    for inode_source in inodes_source:
+        if not isinstance(inode_source, dict):
+            raise ValueError("Un inode ESINOS doit etre un dictionnaire.")
+        champs_inode = ["inode_id", "name", "size", "blocks"]
+        for champ in champs_inode:
+            if champ not in inode_source:
+                raise ValueError("Il manque " + champ + " dans un inode ESINOS.")
+
+        numero = inode_source["inode_id"]
+        if isinstance(numero, bool) or not isinstance(numero, int):
+            raise ValueError("Le numero d'inode ESINOS est invalide.")
+        if numero < 1 or numero > nombre_inodes:
+            raise ValueError("Le numero d'inode ESINOS est hors limites.")
+        if disque["inodes"][numero - 1] is not None:
+            raise ValueError("Deux inodes ESINOS utilisent le meme numero.")
+        disque["inodes"][numero - 1] = {
+            "numero": numero,
+            "nom": inode_source["name"],
+            "taille": inode_source["size"],
+            "blocs": list(inode_source["blocks"]),
         }
 
-    # ------------------------------------------------------------------
-    # Persistance et validation
-    # ------------------------------------------------------------------
-    def reload(self) -> None:
-        """Recharge et valide l'image disque depuis le disque hote."""
+    _verifier_image(disque)
+    return disque
 
-        try:
-            with self.disk_path.open("r", encoding="utf-8") as stream:
-                raw = json.load(stream)
-        except FileNotFoundError as exc:
-            raise DiskImageError("Image disque introuvable : " + str(self.disk_path)) from exc
-        except (OSError, json.JSONDecodeError) as exc:
-            raise DiskImageError("Impossible de lire l'image disque : " + str(exc)) from exc
 
-        if not isinstance(raw, Mapping):
-            raise DiskImageError("L'image disque doit contenir un objet JSON.")
-        if raw.get("schema") != self.SCHEMA:
-            raise DiskImageError("Format d'image disque ESINOS non reconnu.")
-        if raw.get("version") != self.SCHEMA_VERSION:
-            raise DiskImageError("Version d'image disque non prise en charge.")
+def _charger_image_debutant(image):
+    """Relit la premiere image d'atelier, dont les blocs etaient en hexadecimal."""
+    champs = ["taille_bloc", "blocs", "inodes"]
+    for champ in champs:
+        if champ not in image:
+            raise ValueError("Il manque " + champ + " dans l'image de l'atelier.")
+    taille_bloc = image["taille_bloc"]
+    blocs_source = image["blocs"]
+    inodes_source = image["inodes"]
+    _verifier_entier_positif(taille_bloc, "La taille de bloc")
+    if not isinstance(blocs_source, list) or not isinstance(inodes_source, list):
+        raise ValueError("Les blocs et les inodes de l'atelier doivent etre des listes.")
 
-        block_size = raw.get("block_size")
-        block_count = raw.get("block_count")
-        max_inodes = raw.get("max_inodes")
-        self._validate_configuration(block_size, block_count, max_inodes)
-
-        raw_blocks = raw.get("blocks")
-        raw_inodes = raw.get("inodes")
-        if not isinstance(raw_blocks, list):
-            raise DiskImageError("Le champ 'blocks' doit etre une liste.")
-        if not isinstance(raw_inodes, list):
-            raise DiskImageError("Le champ 'inodes' doit etre une liste.")
-
-        inodes: Dict[str, Inode] = {}
-        for raw_inode in raw_inodes:
-            inode = Inode.from_dict(raw_inode)
-            if inode.name in inodes:
-                raise DiskImageError("Deux inodes portent le meme nom : " + str(inode.name))
-            inodes[inode.name] = inode
-
-        blocks: List[Optional[str]] = list(raw_blocks)
-        self._validate_state(
-            inodes,
-            blocks,
-            block_size=block_size,
-            block_count=block_count,
-            max_inodes=max_inodes,
-        )
-
-        self.block_size = block_size
-        self.block_count = block_count
-        self.max_inodes = max_inodes
-        self._inodes = inodes
-        self._blocks = blocks
-
-    def _replace_state(
-        self, inodes: Dict[str, Inode], blocks: List[Optional[str]]
-    ) -> None:
-        """Valide, ecrit atomiquement puis rend un nouvel etat actif."""
-
-        self._validate_state(
-            inodes,
-            blocks,
-            block_size=self.block_size,
-            block_count=self.block_count,
-            max_inodes=self.max_inodes,
-        )
-        payload = self._serialize_state(inodes, blocks)
-        self._atomic_write(payload)
-        self._inodes = inodes
-        self._blocks = blocks
-
-    def _serialize_state(
-        self, inodes: Dict[str, Inode], blocks: Sequence[Optional[str]]
-    ) -> Dict[str, Any]:
-        return {
-            "schema": self.SCHEMA,
-            "version": self.SCHEMA_VERSION,
-            "block_size": self.block_size,
-            "block_count": self.block_count,
-            "max_inodes": self.max_inodes,
-            "inodes": [inode.to_dict() for inode in self.list_from(inodes)],
-            "blocks": list(blocks),
-        }
-
-    @staticmethod
-    def list_from(inodes: Mapping[str, Inode]) -> List[Inode]:
-        """Trie une collection d'inodes sans dependre de l'etat courant."""
-
-        return sorted(inodes.values(), key=lambda inode: inode.inode_id)
-
-    def _atomic_write(self, payload: Mapping[str, Any]) -> None:
-        """Ecrit l'image dans un fichier temporaire puis la remplace."""
-
-        temporary_path = self._write_temporary_json(payload)
-        try:
-            os.replace(str(temporary_path), str(self.disk_path))
-            self._sync_directory(self.disk_path.parent)
-        except OSError as exc:
-            raise DiskImageError("Impossible d'ecrire l'image disque : " + str(exc)) from exc
-        finally:
-            # os.replace supprime normalement le temporaire. Ce garde-fou
-            # couvre les erreurs survenues avant le renommage.
-            self._cleanup_temporary(temporary_path)
-
-    def _exclusive_create(self, payload: Mapping[str, Any]) -> None:
-        """Publie une image neuve sans jamais ecraser une destination.
-
-        Le fichier temporaire et la destination sont dans le meme repertoire.
-        ``link`` cree donc un nouveau nom pour le fichier entier, de maniere
-        atomique. Si la destination existe deja, meme si son JSON est corrompu,
-        le noyau refuse le lien et aucun octet de cette destination ne change.
-        """
-
-        temporary_path = self._write_temporary_json(payload)
-        try:
+    disque = {"taille_bloc": taille_bloc, "blocs": [], "inodes": []}
+    for bloc_hexadecimal in blocs_source:
+        if bloc_hexadecimal is None:
+            disque["blocs"].append(None)
+        else:
+            if not isinstance(bloc_hexadecimal, str):
+                raise ValueError("Un bloc hexadecimal doit etre du texte.")
             try:
-                os.link(str(temporary_path), str(self.disk_path))
-            except FileExistsError as exc:
-                raise DiskAlreadyExistsError(
-                    "Refus d'ecraser une image disque existante : " + str(self.disk_path)
-                ) from exc
-            except OSError as exc:
-                raise DiskImageError(
-                    "Impossible de publier l'image disque sans ecrasement : " + str(exc)
-                ) from exc
-            self._sync_directory(self.disk_path.parent)
-        finally:
-            self._cleanup_temporary(temporary_path)
+                octets = bytes.fromhex(bloc_hexadecimal)
+            except ValueError:
+                raise ValueError("Un bloc de l'atelier n'est pas hexadecimal.")
+            disque["blocs"].append(_encoder_bloc(octets))
 
-    def _write_temporary_json(self, payload: Mapping[str, Any]) -> Path:
-        """Ecrit et synchronise une image temporaire dans le bon repertoire."""
+    for inode_source in inodes_source:
+        if inode_source is None:
+            disque["inodes"].append(None)
+        else:
+            if not isinstance(inode_source, dict):
+                raise ValueError("Un inode de l'atelier doit etre un dictionnaire.")
+            champs_inode = ["numero", "nom", "taille", "blocs"]
+            for champ in champs_inode:
+                if champ not in inode_source:
+                    raise ValueError("Il manque " + champ + " dans un inode de l'atelier.")
+            disque["inodes"].append({
+                "numero": inode_source["numero"],
+                "nom": inode_source["nom"],
+                "taille": inode_source["taille"],
+                "blocs": list(inode_source["blocs"]),
+            })
 
-        parent = self.disk_path.parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix="." + self.disk_path.name + ".",
-                suffix=".tmp",
-                dir=str(parent),
-                text=True,
-            )
-        except OSError as exc:
-            raise DiskImageError("Impossible de preparer l'image disque : " + str(exc)) from exc
+    _verifier_image(disque)
+    return disque
 
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-        except OSError as exc:
-            self._cleanup_temporary(temporary_path)
-            raise DiskImageError("Impossible d'ecrire l'image disque : " + str(exc)) from exc
-        return temporary_path
 
-    @staticmethod
-    def _cleanup_temporary(temporary_path: Path) -> None:
-        """Supprime sans bruit un temporaire deja publie ou abandonne."""
+def charger(chemin):
+    """Charge une image ancienne ou canonique et retourne le disque francais."""
+    try:
+        with open(chemin, "r", encoding="utf-8") as fichier:
+            image = json.load(fichier)
+    except FileNotFoundError:
+        raise FileNotFoundError("Image disque introuvable : " + str(chemin))
+    except (OSError, json.JSONDecodeError) as erreur:
+        raise ValueError("Impossible de lire l'image disque : " + str(erreur))
 
-        try:
-            temporary_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+    if not isinstance(image, dict):
+        raise ValueError("Cette image doit contenir un dictionnaire JSON.")
+    if image.get("schema") == SCHEMA:
+        return _charger_image_canonique(image)
+    if "taille_bloc" in image:
+        return _charger_image_debutant(image)
+    raise ValueError("Image disque inconnue : schema ESINOS absent.")
 
-    @staticmethod
-    def _sync_directory(directory: Path) -> None:
-        """Tente de rendre le renommage durable sans echouer sur une plate-forme.
 
-        Certains systemes ne permettent pas ``fsync`` sur un descripteur de
-        repertoire ; l'ecriture de l'image reste tout de meme valide dans ce
-        cas, d'ou l'ignorance ciblee de cette erreur optionnelle.
-        """
+def _image_canonique(disque):
+    """Traduit le disque francais en schema version 1 du projet publie."""
+    inodes_canonique = []
+    for inode in disque["inodes"]:
+        if inode is not None:
+            inodes_canonique.append({
+                "inode_id": inode["numero"],
+                "name": inode["nom"],
+                "size": inode["taille"],
+                "blocks": list(inode["blocs"]),
+            })
+    return {
+        "schema": SCHEMA,
+        "version": VERSION,
+        "block_size": disque["taille_bloc"],
+        "block_count": len(disque["blocs"]),
+        "max_inodes": len(disque["inodes"]),
+        "inodes": inodes_canonique,
+        "blocks": list(disque["blocs"]),
+    }
 
-        try:
-            descriptor = os.open(str(directory), os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(descriptor)
-        except OSError:
-            pass
-        finally:
-            os.close(descriptor)
 
-    # ------------------------------------------------------------------
-    # Allocation interne
-    # ------------------------------------------------------------------
-    def _store_content(
-        self,
-        *,
-        inode_id: int,
-        name: str,
-        content: str,
-        old_blocks: Sequence[int],
-        blocks: List[Optional[str]],
-    ) -> Inode:
-        """Alloue de nouveaux blocs dans ``blocks`` et fabrique un inode."""
-
-        encoded_chunks = self._encode_content(content)
-        for block_index in old_blocks:
-            blocks[block_index] = None
-
-        free_blocks = [index for index, value in enumerate(blocks) if value is None]
-        if len(encoded_chunks) > len(free_blocks):
-            raise DiskFullError(
-                "Espace insuffisant : "
-                + str(len(encoded_chunks))
-                + " blocs requis, "
-                + str(len(free_blocks))
-                + " disponibles."
-            )
-
-        allocated = tuple(free_blocks[: len(encoded_chunks)])
-        for block_index, chunk in zip(allocated, encoded_chunks):
-            blocks[block_index] = chunk
-
-        return Inode(
-            inode_id=inode_id,
-            name=name,
-            size=len(content.encode("utf-8")),
-            blocks=allocated,
+def _ecrire_temporaire(chemin, image):
+    """Ecrit d'abord un JSON complet dans le repertoire de destination."""
+    destination = os.path.abspath(str(chemin))
+    dossier = os.path.dirname(destination)
+    nom = os.path.basename(destination)
+    try:
+        os.makedirs(dossier, exist_ok=True)
+        descripteur, temporaire = tempfile.mkstemp(
+            prefix="." + nom + ".", suffix=".tmp", dir=dossier, text=True
         )
+    except OSError as erreur:
+        raise OSError("Impossible de preparer l'image disque : " + str(erreur))
 
-    def _encode_content(self, content: str) -> List[str]:
-        raw = content.encode("utf-8")
-        return [
-            base64.b64encode(raw[offset : offset + self.block_size]).decode("ascii")
-            for offset in range(0, len(raw), self.block_size)
-        ]
-
-    def _read_inode_content(self, inode: Inode, blocks: Sequence[Optional[str]]) -> str:
-        chunks: List[bytes] = []
-        for block_index in inode.blocks:
-            encoded = blocks[block_index]
-            if encoded is None:
-                raise DiskImageError(
-                    "L'inode " + str(inode.inode_id) + " reference un bloc libre."
-                )
-            chunks.append(self._decode_block(encoded))
-        raw = b"".join(chunks)
-        if len(raw) != inode.size:
-            raise DiskImageError(
-                "La taille stockee pour le fichier " + inode.name + " est incoherente."
-            )
+    try:
+        with os.fdopen(descripteur, "w", encoding="utf-8") as fichier:
+            json.dump(image, fichier, ensure_ascii=False, indent=2, sort_keys=True)
+            fichier.write("\n")
+            fichier.flush()
+            os.fsync(fichier.fileno())
+    except OSError as erreur:
         try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise DiskImageError(
-                "Le contenu du fichier " + inode.name + " n'est pas du texte UTF-8 valide."
-            ) from exc
+            os.unlink(temporaire)
+        except OSError:
+            pass
+        raise OSError("Impossible d'ecrire l'image disque : " + str(erreur))
+    return temporaire, destination
 
-    def _next_free_inode_id(self) -> int:
-        used = {inode.inode_id for inode in self._inodes.values()}
-        for inode_id in range(1, self.max_inodes + 1):
-            if inode_id not in used:
-                return inode_id
-        raise InodeTableFullError("La table d'inodes est pleine.")
 
-    # ------------------------------------------------------------------
-    # Validation defensive de l'image et des donnees saisies
-    # ------------------------------------------------------------------
-    @classmethod
-    def _validate_name(cls, name: Any) -> None:
-        if not isinstance(name, str) or not cls._NAME_RE.fullmatch(name):
-            raise InvalidFileNameError(
-                "Nom invalide. Utilisez 1 a 64 caracteres : lettres, chiffres, '.', '_' ou '-'."
-            )
-        if name in {".", ".."}:
-            raise InvalidFileNameError("Les noms '.' et '..' sont reserves.")
+def _supprimer_temporaire(temporaire):
+    try:
+        os.unlink(temporaire)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
-    @staticmethod
-    def _validate_content(content: Any) -> None:
-        if not isinstance(content, str):
-            raise InvalidContentError("Le contenu d'un fichier doit etre une chaine de caracteres.")
 
-    @staticmethod
-    def _validate_configuration(block_size: Any, block_count: Any, max_inodes: Any) -> None:
-        values = {
-            "block_size": block_size,
-            "block_count": block_count,
-            "max_inodes": max_inodes,
-        }
-        for label, value in values.items():
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise DiskImageError(label + " doit etre un entier strictement positif.")
-            # Une borne elevee mais finie evite de tenter de charger une image
-            # malveillante qui demanderait une quantite enorme de memoire.
-            if value > 1_000_000:
-                raise DiskImageError(label + " depasse la limite autorisee.")
+def sauvegarder(chemin, disque):
+    """Valide puis remplace l'image entiere d'un seul coup."""
+    _verifier_image(disque)
+    image = _image_canonique(disque)
+    temporaire, destination = _ecrire_temporaire(chemin, image)
+    try:
+        os.replace(temporaire, destination)
+    except OSError as erreur:
+        raise OSError("Impossible de publier l'image disque : " + str(erreur))
+    finally:
+        _supprimer_temporaire(temporaire)
 
-    @classmethod
-    def _decode_block(cls, encoded: Any) -> bytes:
-        if not isinstance(encoded, str) or not encoded:
-            raise DiskImageError("Un bloc alloue doit contenir une chaine Base64 non vide.")
+
+def initialiser(chemin, nombre_blocs=64, taille_bloc=64, nombre_inodes=16):
+    """Cree une image neuve sans ecraser un chemin deja occupe."""
+    _verifier_entier_positif(nombre_blocs, "Le nombre de blocs")
+    _verifier_entier_positif(taille_bloc, "La taille de bloc")
+    _verifier_entier_positif(nombre_inodes, "Le nombre d'inodes")
+
+    disque = {
+        "taille_bloc": taille_bloc,
+        "blocs": [None] * nombre_blocs,
+        "inodes": [None] * nombre_inodes,
+    }
+    _verifier_image(disque)
+    image = _image_canonique(disque)
+    temporaire, destination = _ecrire_temporaire(chemin, image)
+    try:
         try:
-            return base64.b64decode(encoded.encode("ascii"), validate=True)
-        except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
-            raise DiskImageError("Un bloc contient des donnees Base64 invalides.") from exc
-
-    @classmethod
-    def _validate_state(
-        cls,
-        inodes: Mapping[str, Inode],
-        blocks: Sequence[Optional[str]],
-        *,
-        block_size: int,
-        block_count: int,
-        max_inodes: int,
-    ) -> None:
-        """Verifie toutes les invariantes avant une ecriture ou un chargement."""
-
-        cls._validate_configuration(block_size, block_count, max_inodes)
-        if len(blocks) != block_count:
-            raise DiskImageError("Le nombre de blocs de l'image est incoherent.")
-        if len(inodes) > max_inodes:
-            raise DiskImageError("La table d'inodes depasse sa capacite.")
-
-        allocated_blocks = set()
-        inode_ids = set()
-        for mapping_name, inode in inodes.items():
-            if not isinstance(inode, Inode):
-                raise DiskImageError("La table contient un inode invalide.")
-            cls._validate_name(mapping_name)
-            cls._validate_name(inode.name)
-            if mapping_name != inode.name:
-                raise DiskImageError("La cle d'un inode ne correspond pas a son nom.")
-            if (
-                isinstance(inode.inode_id, bool)
-                or not isinstance(inode.inode_id, int)
-                or not 1 <= inode.inode_id <= max_inodes
-            ):
-                raise DiskImageError("Numero d'inode invalide.")
-            if inode.inode_id in inode_ids:
-                raise DiskImageError("Deux entrees utilisent le meme numero d'inode.")
-            inode_ids.add(inode.inode_id)
-
-            if isinstance(inode.size, bool) or not isinstance(inode.size, int) or inode.size < 0:
-                raise DiskImageError("Taille d'inode invalide.")
-            if not isinstance(inode.blocks, tuple):
-                raise DiskImageError("Les blocs d'un inode doivent etre immuables.")
-
-            required_blocks = (inode.size + block_size - 1) // block_size
-            if len(inode.blocks) != required_blocks:
-                raise DiskImageError(
-                    "Le nombre de blocs de l'inode " + str(inode.inode_id) + " est incoherent."
-                )
-
-            content_chunks: List[bytes] = []
-            for position, block_index in enumerate(inode.blocks):
-                if isinstance(block_index, bool) or not isinstance(block_index, int):
-                    raise DiskImageError("Indice de bloc invalide.")
-                if not 0 <= block_index < block_count:
-                    raise DiskImageError("Indice de bloc hors limites.")
-                if block_index in allocated_blocks:
-                    raise DiskImageError("Un bloc est reference par plusieurs inodes.")
-                allocated_blocks.add(block_index)
-
-                encoded = blocks[block_index]
-                if encoded is None:
-                    raise DiskImageError("Un inode reference un bloc libre.")
-                chunk = cls._decode_block(encoded)
-                if not 0 < len(chunk) <= block_size:
-                    raise DiskImageError("La taille d'un bloc alloue est invalide.")
-                if position < len(inode.blocks) - 1 and len(chunk) != block_size:
-                    raise DiskImageError("Seul le dernier bloc d'un fichier peut etre partiel.")
-                content_chunks.append(chunk)
-
-            content = b"".join(content_chunks)
-            if len(content) != inode.size:
-                raise DiskImageError("La taille d'un inode ne correspond pas a ses blocs.")
-            try:
-                content.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise DiskImageError("Un fichier stocke n'est pas du texte UTF-8 valide.") from exc
-
-        for block_index, encoded in enumerate(blocks):
-            if encoded is None:
-                continue
-            if block_index not in allocated_blocks:
-                raise DiskImageError("Un bloc alloue n'est reference par aucun inode.")
-            chunk = cls._decode_block(encoded)
-            if not 0 < len(chunk) <= block_size:
-                raise DiskImageError("La taille d'un bloc alloue est invalide.")
+            # link est atomique : deux initialisations ne peuvent pas gagner.
+            os.link(temporaire, destination)
+        except FileExistsError:
+            raise FileExistsError("Refus d'ecraser une image disque existante.")
+        except OSError as erreur:
+            if erreur.errno == errno.EEXIST:
+                raise FileExistsError("Refus d'ecraser une image disque existante.")
+            raise OSError("Impossible de creer l'image disque : " + str(erreur))
+    finally:
+        _supprimer_temporaire(temporaire)
+    return disque
 
 
-# Alias court, pratique pour un import depuis le menu integre.
-MiniFileSystem = VirtualFileSystem
-FileSystem = VirtualFileSystem
+def chercher_inode(disque, nom):
+    """Renvoie l'inode qui porte ce nom, ou None s'il n'existe pas."""
+    for inode in disque["inodes"]:
+        if inode is not None and inode["nom"] == nom:
+            return inode
+    return None
+
+
+def creer_fichier(chemin, nom, texte):
+    """Alloue un inode et les premiers blocs libres pour un nouveau texte."""
+    _verifier_nom(nom)
+    if not isinstance(texte, str):
+        raise ValueError("Le contenu du fichier doit etre du texte.")
+    disque = charger(chemin)
+    if chercher_inode(disque, nom) is not None:
+        raise ValueError("Ce nom existe deja.")
+
+    case_inode = None
+    for position in range(len(disque["inodes"])):
+        if disque["inodes"][position] is None:
+            case_inode = position
+            break
+    if case_inode is None:
+        raise ValueError("La table d'inodes est pleine.")
+
+    octets = texte.encode("utf-8")
+    taille_bloc = disque["taille_bloc"]
+    morceaux = []
+    debut = 0
+    while debut < len(octets):
+        morceau = octets[debut:debut + taille_bloc]
+        morceaux.append(_encoder_bloc(morceau))
+        debut += taille_bloc
+
+    libres = []
+    for numero in range(len(disque["blocs"])):
+        if disque["blocs"][numero] is None:
+            libres.append(numero)
+    if len(morceaux) > len(libres):
+        raise ValueError("Le disque virtuel manque de blocs libres.")
+
+    blocs_inode = []
+    for position in range(len(morceaux)):
+        numero_bloc = libres[position]
+        disque["blocs"][numero_bloc] = morceaux[position]
+        blocs_inode.append(numero_bloc)
+
+    inode = {
+        "numero": case_inode + 1,
+        "nom": nom,
+        "taille": len(octets),
+        "blocs": blocs_inode,
+    }
+    disque["inodes"][case_inode] = inode
+    sauvegarder(chemin, disque)
+    return inode
+
+
+def lire_fichier(chemin, nom):
+    """Suit les numeros de blocs d'un inode et reconstitue le texte UTF-8."""
+    disque = charger(chemin)
+    inode = chercher_inode(disque, nom)
+    if inode is None:
+        raise ValueError("Fichier introuvable : " + str(nom))
+
+    octets = b""
+    for numero_bloc in inode["blocs"]:
+        octets += _decoder_bloc(disque["blocs"][numero_bloc])
+    try:
+        return octets.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Le fichier ne contient pas du texte UTF-8.")
+
+
+def supprimer_fichier(chemin, nom):
+    """Libere les blocs et la case d'inode d'un fichier."""
+    disque = charger(chemin)
+    inode = chercher_inode(disque, nom)
+    if inode is None:
+        raise ValueError("Fichier introuvable : " + str(nom))
+
+    for numero_bloc in inode["blocs"]:
+        disque["blocs"][numero_bloc] = None
+    disque["inodes"][inode["numero"] - 1] = None
+    sauvegarder(chemin, disque)
+
+
+def lister_inodes(chemin):
+    """Retourne toutes les cases de la table, y compris les cases libres."""
+    disque = charger(chemin)
+    return disque["inodes"]
+
+
+def etat_disque(chemin):
+    """Calcule des compteurs simples pour le menu interactif."""
+    disque = charger(chemin)
+    blocs_utilises = 0
+    for bloc in disque["blocs"]:
+        if bloc is not None:
+            blocs_utilises += 1
+    inodes_utilises = 0
+    for inode in disque["inodes"]:
+        if inode is not None:
+            inodes_utilises += 1
+    return {
+        "taille_bloc": disque["taille_bloc"],
+        "nombre_blocs": len(disque["blocs"]),
+        "blocs_utilises": blocs_utilises,
+        "blocs_libres": len(disque["blocs"]) - blocs_utilises,
+        "nombre_inodes": len(disque["inodes"]),
+        "inodes_utilises": inodes_utilises,
+        "inodes_libres": len(disque["inodes"]) - inodes_utilises,
+    }
+
+
+def reformater(chemin):
+    """Efface volontairement tous les fichiers mais garde la meme geometrie."""
+    ancien = charger(chemin)
+    disque = {
+        "taille_bloc": ancien["taille_bloc"],
+        "blocs": [None] * len(ancien["blocs"]),
+        "inodes": [None] * len(ancien["inodes"]),
+    }
+    sauvegarder(chemin, disque)
+    return disque

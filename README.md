@@ -1,199 +1,177 @@
-# ESINOS - mini-noyau simule
+# ESINOS - mini-noyau simulé
 
-ESINOS simule en espace utilisateur des mécanismes fondamentaux d'un système
-d'exploitation. Il affiche les décisions de l'ordonnanceur et du gestionnaire
-de mémoire. Le bonus utilise un fichier JSON comme disque virtuel.
+ESINOS est un simulateur pédagogique écrit en Python avec des fonctions,
+des listes et des dictionnaires. Il permet de saisir ses données et
+d'observer les décisions d'ordonnancement, de pagination et d'allocation
+de fichiers. Python 3.9 ou plus récent suffit. Le code utilise la
+bibliothèque standard.
 
-Le projet couvre les deux volets obligatoires du sujet :
+## Télécharger et lancer
 
-- un ordonnanceur de processus avec **FCFS**, **SJF**, **Round Robin** et
-  **priorite**, un diagramme de Gantt et les temps moyens ;
-- une simulation de pagination avec traduction logique-vers-physique,
-  remplacement **FIFO**, **LRU** et **Optimal**, TLB et calcul de l'EAT.
-
-Le bonus est un mini-systeme de fichiers a inodes persistant dans une image
-disque JSON : creation, lecture, suppression et affichage de la table
-d'inodes.
-
-## Prerequis
-
-- Python 3.9 ou plus récent
-- Git pour cloner le dépôt, facultatif si vous téléchargez le ZIP
-- `make` pour lancer les tests, facultatif
-
-ESINOS utilise uniquement la bibliothèque standard de Python.
-
-## Installation et lancement
-
-Si vous découvrez le projet, ouvrez un terminal dans le dossier où vous
-souhaitez télécharger ESINOS. Avec Git, tapez ces deux lignes.
+Au premier téléchargement avec Git, ouvrez le Terminal dans le dossier
+où vous souhaitez installer le projet.
 
 ```bash
 git clone https://github.com/ziaaad7/esinos.git
 cd esinos
-```
-
-`git clone` est nécessaire uniquement au premier téléchargement. Si vous avez
-déjà le projet, ouvrez un terminal dans le dossier qui contient `README.md` et
-`code/`. Si vous avez téléchargé le ZIP depuis GitHub, décompressez-le d’abord.
-
-Depuis ce dossier, entrez dans `code/` et lancez le menu interactif.
-
-```bash
 cd code
 python3 -m esinos
 ```
 
-Dans le menu, choisissez `5` pour lancer la démonstration ou `0` pour quitter.
-Pour lancer directement la démonstration depuis `code/`, utilisez cette commande.
+Si vous avez téléchargé un ZIP, décompressez-le et ouvrez son dossier
+avant de taper `cd code`. Si le projet se trouve déjà dans Documents
+sur votre Mac, utilisez directement ces commandes.
+
+```bash
+cd ~/Documents/esinos/code
+python3 -m esinos
+```
+
+Le menu propose les parcours suivants.
+
+| Choix | Simulation |
+| --- | --- |
+| 1 | CPU avec FCFS, SJF, Round Robin et Priority |
+| 2 | Remplacement de pages avec FIFO, LRU et Optimal |
+| 3 | Traduction d'adresses, TLB et EAT |
+| 4 | Bonus officiel du disque virtuel à inodes |
+| 5 | Démonstration complète |
+| 0 | Quitter |
+
+Appuyez sur Entrée pour garder une valeur proposée entre crochets.
+Dans les choix CPU et mémoire, sélectionnez un algorithme par son numéro
+ou par son nom. La démo peut aussi être lancée directement depuis `code/`.
 
 ```bash
 python3 -m esinos demo
 ```
 
-La démonstration utilise les mêmes exemples à chaque lancement.
+## Ordonnancement CPU
 
-## Menu et demonstrations
+Un processus contient son nom, son instant d'arrivée AT, sa durée CPU BT
+et sa priorité numérique. Dans le menu, vous pouvez conserver les
+processus proposés ou saisir une liste comme celle-ci.
 
-Le menu integre les trois simulateurs.
+```text
+P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2
+```
 
-| Volet | Ce que montre la demonstration |
+La priorité est facultative dans une commande et vaut alors zéro.
+FCFS fait passer le premier arrivé. SJF prend la plus courte durée parmi
+les processus prêts. Priority choisit le plus petit numéro de priorité.
+Ces trois politiques sont non préemptives. Round Robin partage le CPU
+avec un quantum positif. Les arrivées à la fin d'une tranche sont ajoutées
+à la file avant la réinsertion du processus interrompu.
+
+Le Gantt contient les tranches d'exécution et les périodes `IDLE`.
+Le tableau donne PID, AT, BT, Prio, Fin (CT), Attente et Séjour.
+
+```text
+séjour = fin - arrivée
+attente = séjour - durée CPU
+```
+
+Le code du calcul se trouve dans `code/esinos/scheduler.py`.
+Un processus y est un dictionnaire. `ordonnancer` renvoie le Gantt
+et les lignes du tableau. La file de Round Robin est une liste.
+
+## Mémoire virtuelle
+
+`code/esinos/memory.py` contient les fonctions de remplacement,
+de traduction et de calcul de l'EAT.
+
+- `remplacer` suit une suite de pages et montre les cadres, les hits,
+  les défauts et la victime de chaque accès.
+- `traduire` traite une suite d'adresses avec une table page-cadre et
+  un TLB à remplacement LRU. Le cache vit pendant cette suite.
+- `calculer_eat` fait la moyenne des coûts d'accès selon le taux
+  de hit. Le modèle exclut le délai de chargement depuis le stockage.
+
+```text
+page = adresse // taille_page
+déplacement = adresse % taille_page
+physique = cadre * taille_page + déplacement
+EAT = temps_TLB + (2 - taux_hit) * temps_mémoire
+```
+
+Un cadre 0 est valide. Une page absente de la table donne une adresse
+physique à `None`. Cet accès compte comme un miss dans le ratio TLB.
+
+## Bonus officiel des fichiers à inodes
+
+Le module `code/esinos/filesystem.py` conserve les fichiers virtuels dans
+une image disque JSON. Les inodes et les blocs sont représentés avec
+des listes et des dictionnaires. Les opérations sont des fonctions
+comme `creer_fichier`, `lire_fichier` et `supprimer_fichier`.
+
+Les images ESINOS existantes restent lisibles. Les écritures utilisent
+le format ESINOS version 1 et ses blocs en Base64. Le menu charge le
+disque à `code/data/esinos.disk.json`. L'initialisation refuse
+d'écraser une image. Le reformatage dans le menu demande une confirmation.
+
+## Commandes reproductibles
+
+Ces exemples s'exécutent depuis le dossier `code/`.
+
+```bash
+python3 -m esinos scheduler --algorithm rr --quantum 2 --processes "P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2"
+python3 -m esinos memory --algorithm fifo --frames 3 --references "7,0,1,2,0,3,0,4,2,3,0,3,2"
+python3 -m esinos translate --page-size 64 --page-table "0:5,1:2,2:7,3:1" --addresses "5,70,75,130,5,195,70,260"
+python3 -m esinos fs --disk data/exemple.disk.json --blocks 12 --block-size 16 --inodes 4 init
+python3 -m esinos fs --disk data/exemple.disk.json create notes.txt "Bonjour ESINOS"
+python3 -m esinos fs --disk data/exemple.disk.json inodes
+python3 -m esinos fs --disk data/exemple.disk.json read notes.txt
+python3 -m esinos fs --disk data/exemple.disk.json delete notes.txt
+```
+
+## Résultats de la démonstration
+
+| Algorithme ou mesure | Résultat |
 | --- | --- |
-| Ordonnancement | Le Gantt obtenu avec FCFS, SJF, Round Robin et priorite, puis les temps d'attente et de sejour moyens. |
-| Memoire virtuelle | La traduction des references, les defauts de page, l'etat des cadres et les evictions FIFO, LRU ou Optimal. |
-| TLB / EAT | L'adresse 75 réutilise la traduction de l'adresse 70. La démo affiche 1 hit sur 8 accès et un EAT de 197,50 ns. |
-| Systeme de fichiers (bonus) | La creation, la lecture et la suppression d'un fichier, puis la table d'inodes et les blocs occupes. |
+| FCFS, attente / séjour moyens | 4,75 / 8,75 |
+| SJF, attente / séjour moyens | 4,00 / 8,00 |
+| Round Robin q=2, attente / séjour moyens | 5,00 / 9,00 |
+| Priority, attente / séjour moyens | 5,50 / 9,50 |
+| Défauts FIFO / LRU / Optimal | 10 / 9 / 7 |
+| Traduction de 75 | Adresse 139, hit TLB |
+| TLB et EAT | 1 hit sur 8 et 197,50 ns |
+| Fichier de démo | 40 octets, inode 1 et blocs 0, 1, 2 |
 
-Exemple de sortie de la démonstration.
+La démo crée une image temporaire pour ses fichiers. Le menu conserve
+l'image interactive après la fermeture du programme.
 
-```text
-=== ESINOS : demonstration integree ===
-[Ordonnancement] ... Gantt et moyennes
-[Memoire] ... traduction et evictions
-[Fichiers] ... inode(s) et blocs
-```
+## Vérifier le code
 
-Le contenu exact affiche depend des jeux de references integres a la demo ; les
-calculs, et non un resultat fige, sont produits par les modules du projet.
-
-## Architecture
-
-```text
-code/
-├── esinos/
-│   ├── __init__.py       # paquet et API publique
-│   ├── __main__.py       # point d'entree : python3 -m esinos
-│   ├── cli.py            # menu, affichage et validation des saisies
-│   ├── scheduler.py      # processus, algorithmes et statistiques
-│   ├── memory.py         # pagination, TLB, EAT et remplacement
-│   └── filesystem.py     # bonus : inodes, blocs et operations fichiers
-├── tests/                # tests unitaires et cas limites
-└── Makefile              # raccourcis d'execution et de test
-```
-
-Cette separation evite que la logique d'algorithme soit melangee a
-l'interaction terminal. Les modules `scheduler`, `memory` et `filesystem`
-peuvent donc etre testes directement et le menu se limite a presenter les
-resultats.
-
-### Ordonnancement
-
-L’ordonnanceur simule un CPU. Dans le menu `1`, vous pouvez saisir vos propres
-processus au format `PID:arrivee:burst[:priorite]`, séparés par des virgules.
-Par exemple, `P1:0:5:2,P2:1:2:1` définit deux processus. Appuyez sur Entrée
-pour utiliser la liste d’exemple, puis choisissez l’algorithme. Le simulateur
-affiche le Gantt, le temps de fin (CT), ainsi que les temps d’attente et de
-séjour et leurs moyennes.
-
-```text
-temps de sejour = fin - arrivee
-temps d'attente = temps de sejour - duree CPU
-```
-
-Les criteres de departage sont deterministes (arrivee puis identifiant) afin
-que deux executions du meme scenario donnent le meme resultat.
-
-### Memoire
-
-Une adresse logique est découpée en numéro de page et déplacement. L'écran
-de traduction utilise une table préchargée et signale les pages absentes.
-Dans l'écran de remplacement, les algorithmes attribuent les cadres en
-suivant une suite de références. Le TLB met en cache les traductions
-récentes. Le modèle calcule l'EAT avec la formule suivante.
-
-```text
-EAT = h × (t_TLB + t_mem) + (1 - h) × (t_TLB + 2 × t_mem)
-```
-
-Dans cette formule, `h` désigne le taux de succès du TLB et `t_mem` le
-temps d'un accès mémoire. Les durées doivent être finies et positives ou
-nulles. Le modèle omet la pénalité de chargement d'une page absente.
-
-### Systeme de fichiers (bonus)
-
-Le mini-systeme de fichiers gere une table d'inodes et un espace de blocs
-simule. Un inode porte les metadonnees et les blocs associes au fichier. Les
-operations refusent les noms invalides, les fichiers inexistants et les
-allocations qui depassent la capacite disponible, sans corrompre l'etat deja
-enregistre.
-
-Depuis `code/`, la commande suivante crée une image neuve. Utilisez un
-nouveau nom si l'image existe déjà.
-
-```bash
-python3 -m esinos fs --disk data/exemple.disk.json --blocks 8 --block-size 16 init
-```
-
-`fs init` refuse un chemin déjà occupé. Le choix « Reformater » du menu
-interactif demande confirmation avant d'effacer une image chargée.
-
-## Tests
-
-Depuis `code/` :
-
-```bash
-make test
-```
-
-La suite teste notamment :
-
-- l'ordre et les statistiques des quatre ordonnanceurs ;
-- les cas d'arrivee differes, de processeur inactif et de quantum Round Robin ;
-- les traductions, defauts de page et evictions FIFO/LRU/Optimal ;
-- les hits et misses TLB, la démo et le rejet de durées EAT non finies ;
-- l'allocation, la lecture et la libération des blocs, ainsi que la protection
-  des images disque existantes à l'initialisation.
-
-Pour lancer les tests sans `make` :
+Depuis `code/`, lancez la suite de tests.
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## Exemples de scenarios a presenter
+Avec `make`, les raccourcis `make run`, `make demo` et `make test`
+appellent les mêmes commandes.
 
-1. Choisir trois ou quatre processus aux arrivees et durees distinctes,
-   comparer FCFS, SJF et Round Robin, puis expliquer l'effet du quantum.
-2. Donner une chaine de references de pages suffisamment longue pour provoquer
-   plusieurs evictions ; montrer FIFO pas a pas, puis comparer son nombre de
-   defauts a LRU.
-3. Afficher les statistiques TLB et recalculer l'EAT a partir du taux de hit.
-4. Creer un fichier du bonus, le lire, lister les inodes, puis le supprimer et
-   verifier que ses blocs redeviennent libres.
+## Organisation
 
-## Limites assumees
+```text
+code/
+  esinos/
+    __main__.py      lance cli.main
+    cli.py           menu, commandes et affichage
+    scheduler.py     fonctions des quatre politiques CPU
+    memory.py        remplacement, traduction, TLB et EAT
+    filesystem.py    image, inodes et blocs
+  tests/             vérification des algorithmes et commandes
+  Makefile           raccourcis facultatifs
+```
 
-ESINOS est un outil pedagogique, pas un vrai noyau. Il ne cree aucun processus
-systeme et n'accede pas a la memoire physique. Les simulations d'ordonnancement
-et de memoire vivent uniquement pendant l'execution ; le bonus de fichiers est
-la seule exception, car son image-disque JSON est volontairement persistante.
-Ces simplifications permettent de rendre les algorithmes, leurs etats
-intermediaires et leurs compromis directement observables.
+Le programme calcule sur des données simulées. Il utilise un CPU, des
+durées abstraites et un seul burst par processus. Le coût de changement
+de contexte est omis. Le disque est prévu pour une session de modification
+à la fois.
 
-## Fichiers à remettre
+## Livrables
 
-- `code/` : code source commente ;
-- `README.md` : ce guide d'execution ;
-- `report.pdf` : rapport technique de 4 pages ;
-- `demo.mp4` : vidéo de démonstration à enregistrer par le groupe, caméra
-  ouverte. Placer le fichier à la racine, à côté de `report.pdf`.
+Le dépôt contient `code/`, ce `README.md` et `report.pdf`.
+Le groupe enregistre sa vidéo caméra ouverte et ajoute `demo.mp4`
+à la racine pour la remise.

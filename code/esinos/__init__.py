@@ -1,17 +1,6 @@
-"""ESINOS - simulateur pedagogique de systeme d'exploitation.
+"""ESINOS utilise des fonctions, des listes et des dictionnaires."""
 
-Le paquet reste volontairement sans dependance externe afin de pouvoir etre
-execute dans un environnement de TP ordinaire.
-"""
+from .scheduler import ordonnancer
+from .memory import remplacer, traduire, calculer_eat
 
-from .scheduler import Process, run_scheduler
-from .memory import VirtualMemoryManager, simulate_page_replacement
-
-__all__ = [
-    "Process",
-    "VirtualMemoryManager",
-    "run_scheduler",
-    "simulate_page_replacement",
-]
-
-__version__ = "1.0.0"
+__version__ = "2.0.0"

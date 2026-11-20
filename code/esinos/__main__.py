@@ -1,5 +1,3 @@
-"""Point d'entree de ``python3 -m esinos``."""
-
 from .cli import main
 
 

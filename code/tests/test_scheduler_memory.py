@@ -1,205 +1,137 @@
-"""Tests deterministes des simulateurs d'ordonnancement et de memoire."""
-
-from __future__ import annotations
+"""Tests simples des algorithmes presentes dans ESINOS debutant."""
 
 import sys
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 
 
-# Les tests restent executables aussi bien depuis ``code/`` que depuis la
-# racine du livrable avec ``python3 -m unittest discover``.
-CODE_ROOT = Path(__file__).resolve().parents[1]
-if str(CODE_ROOT) not in sys.path:
-    sys.path.insert(0, str(CODE_ROOT))
+CODE = Path(__file__).resolve().parents[1]
+if str(CODE) not in sys.path:
+    sys.path.insert(0, str(CODE))
 
-from esinos.memory import (  # noqa: E402
-    VirtualMemoryError,
-    VirtualMemoryManager,
-    parse_references,
-    simulate_page_replacement,
-)
-from esinos.cli import main  # noqa: E402
-from esinos.scheduler import (  # noqa: E402
-    Process,
-    SchedulerError,
-    format_schedule,
-    parse_processes,
-    run_scheduler,
-)
+from esinos.cli import lire_processus
+from esinos.memory import calculer_eat, remplacer, traduire
+from esinos.scheduler import ordonnancer
 
 
-def timeline_as_tuples(result):
-    """Normalise le Gantt pour que les assertions restent tres lisibles."""
+PROCESSUS_DEMO = [
+    {"nom": "P1", "arrivee": 0, "duree": 7, "priorite": 2},
+    {"nom": "P2", "arrivee": 2, "duree": 4, "priorite": 1},
+    {"nom": "P3", "arrivee": 4, "duree": 1, "priorite": 3},
+    {"nom": "P4", "arrivee": 5, "duree": 4, "priorite": 2},
+]
 
-    return [(slice_.label, slice_.start, slice_.end) for slice_ in result.timeline]
 
+class SchedulerTests(unittest.TestCase):
+    def test_quatre_gantt_de_la_demonstration(self):
+        attendus = {
+            "fcfs": [
+                ("P1", 0, 7), ("P2", 7, 11),
+                ("P3", 11, 12), ("P4", 12, 16),
+            ],
+            "sjf": [
+                ("P1", 0, 7), ("P3", 7, 8),
+                ("P2", 8, 12), ("P4", 12, 16),
+            ],
+            "rr": [
+                ("P1", 0, 2), ("P2", 2, 4), ("P1", 4, 6),
+                ("P3", 6, 7), ("P2", 7, 9), ("P4", 9, 11),
+                ("P1", 11, 13), ("P4", 13, 15), ("P1", 15, 16),
+            ],
+            "priorite": [
+                ("P1", 0, 7), ("P2", 7, 11),
+                ("P4", 11, 15), ("P3", 15, 16),
+            ],
+        }
 
-class ProcessAndSchedulerTests(unittest.TestCase):
-    def test_process_and_parser_validate_the_input_format(self):
-        parsed = parse_processes(" P1:0:3:2, P2:1:2 ")
+        for algorithme in attendus:
+            with self.subTest(algorithme=algorithme):
+                gantt, lignes = ordonnancer(PROCESSUS_DEMO, algorithme, 2)
+                self.assertEqual(gantt, attendus[algorithme])
+                self.assertEqual(len(lignes), 4)
 
+    def test_mesures_et_alias_priority(self):
+        _, lignes = ordonnancer(PROCESSUS_DEMO, "fcfs")
         self.assertEqual(
-            parsed,
-            [Process("P1", arrival=0, burst=3, priority=2), Process("P2", 1, 2, 0)],
+            lignes,
+            [
+                ("P1", 0, 7, 2, 7, 0, 7),
+                ("P2", 2, 4, 1, 11, 5, 9),
+                ("P3", 4, 1, 3, 12, 7, 8),
+                ("P4", 5, 4, 2, 16, 7, 11),
+            ],
         )
-        with self.assertRaises(SchedulerError):
-            Process("", arrival=0, burst=1)
-        with self.assertRaises(SchedulerError):
-            parse_processes("P1:0:0")
+        gantt_francais, _ = ordonnancer(PROCESSUS_DEMO, "priorite")
+        gantt_anglais, _ = ordonnancer(PROCESSUS_DEMO, "priority")
+        self.assertEqual(gantt_anglais, gantt_francais)
 
-    def test_fcfs_includes_idle_time_and_correct_metrics(self):
-        result = run_scheduler(
-            [Process("P1", 2, 2), Process("P2", 4, 1)], "fcfs"
-        )
-
-        self.assertEqual(
-            timeline_as_tuples(result),
-            [("IDLE", 0, 2), ("P1", 2, 4), ("P2", 4, 5)],
-        )
-        metrics = {item.pid: item for item in result.metrics}
-        self.assertEqual((metrics["P1"].waiting, metrics["P1"].turnaround), (0, 2))
-        self.assertEqual((metrics["P2"].waiting, metrics["P2"].turnaround), (0, 1))
-        self.assertEqual(result.average_waiting, 0.0)
-
-    def test_sjf_selects_the_shortest_ready_process(self):
-        processes = [Process("P1", 0, 3), Process("P2", 1, 2), Process("P3", 2, 1)]
-        result = run_scheduler(processes, "sjf")
-
-        self.assertEqual(
-            timeline_as_tuples(result),
-            [("P1", 0, 3), ("P3", 3, 4), ("P2", 4, 6)],
-        )
-        metrics = {item.pid: item for item in result.metrics}
-        self.assertEqual(metrics["P3"].waiting, 1)
-        self.assertAlmostEqual(result.average_turnaround, 10 / 3)
-
-    def test_round_robin_honours_quantum_and_arrivals_at_slice_end(self):
-        processes = [Process("P1", 0, 3), Process("P2", 1, 2), Process("P3", 2, 1)]
-        result = run_scheduler(processes, "rr", quantum=2)
-
-        self.assertEqual(result.quantum, 2)
-        self.assertEqual(
-            timeline_as_tuples(result),
-            [("P1", 0, 2), ("P2", 2, 4), ("P3", 4, 5), ("P1", 5, 6)],
-        )
-        metrics = {item.pid: item for item in result.metrics}
-        self.assertEqual((metrics["P1"].completion, metrics["P1"].waiting), (6, 3))
-        self.assertEqual((metrics["P2"].completion, metrics["P2"].waiting), (4, 1))
-        self.assertEqual((metrics["P3"].completion, metrics["P3"].waiting), (5, 2))
-        self.assertEqual(result.average_waiting, 2.0)
-
-    def test_priority_uses_lowest_numeric_value_first(self):
-        processes = [
-            Process("P1", 0, 2, priority=2),
-            Process("P2", 0, 1, priority=1),
-            Process("P3", 0, 1, priority=0),
+    def test_rr_place_l_arrivee_de_fin_avant_la_reinsertion(self):
+        processus = [
+            {"nom": "P1", "arrivee": 0, "duree": 3, "priorite": 0},
+            {"nom": "P2", "arrivee": 1, "duree": 2, "priorite": 0},
+            {"nom": "P3", "arrivee": 2, "duree": 1, "priorite": 0},
         ]
-        result = run_scheduler(processes, "priority")
-
+        gantt, _ = ordonnancer(processus, "rr", 2)
         self.assertEqual(
-            timeline_as_tuples(result),
-            [("P3", 0, 1), ("P2", 1, 2), ("P1", 2, 4)],
-        )
-        self.assertEqual(result.algorithm, "Priority (non preemptif)")
-        self.assertEqual(result.average_waiting, 1.0)
-
-    def test_scheduler_hides_response_metrics_and_rejects_retired_policy(self):
-        result = run_scheduler([Process("P1", 0, 2, priority=1)], "priority")
-        rendered = format_schedule(result)
-
-        self.assertIn("AT", rendered)
-        self.assertIn("BT", rendered)
-        self.assertIn("Fin (CT)", rendered)
-        self.assertNotIn("Debut", rendered)
-        self.assertNotIn("Reponse", rendered)
-        self.assertFalse(hasattr(result.metrics[0], "first_start"))
-        self.assertFalse(hasattr(result.metrics[0], "response"))
-        self.assertFalse(hasattr(result, "average_response"))
-        with self.assertRaises(SchedulerError):
-            run_scheduler([Process("P1", 0, 2, priority=1)], "priority-preemptive")
-
-
-class PageReplacementTests(unittest.TestCase):
-    def test_parse_references_accepts_commas_and_semicolons(self):
-        self.assertEqual(parse_references("7, 0; 1,2"), [7, 0, 1, 2])
-        with self.assertRaises(VirtualMemoryError):
-            parse_references("1,,2")
-
-    def test_fifo_records_hits_frames_and_evicted_page(self):
-        result = simulate_page_replacement([1, 2, 3, 1, 4], 3, "fifo")
-
-        self.assertEqual(result.algorithm, "FIFO")
-        self.assertEqual(result.page_faults, 4)
-        self.assertEqual(result.hits, 1)
-        self.assertTrue(result.steps[3].hit)
-        self.assertEqual(result.steps[3].frames, (1, 2, 3))
-        self.assertEqual((result.steps[4].evicted, result.steps[4].frames), (1, (4, 2, 3)))
-
-    def test_fifo_lru_and_optimal_have_known_fault_counts(self):
-        references = [1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5]
-
-        fifo = simulate_page_replacement(references, 3, "fifo")
-        lru = simulate_page_replacement(references, 3, "lru")
-        optimal = simulate_page_replacement(references, 3, "optimal")
-
-        self.assertEqual((fifo.page_faults, lru.page_faults, optimal.page_faults), (9, 10, 7))
-        self.assertEqual(optimal.hits, 5)
-        self.assertLess(optimal.page_faults, fifo.page_faults)
-
-
-class VirtualMemoryManagerTests(unittest.TestCase):
-    def test_translation_tlb_lru_and_effective_access_time(self):
-        manager = VirtualMemoryManager(
-            page_size=100,
-            page_table={0: 5, 1: 7, 2: 2},
-            tlb_capacity=2,
+            gantt,
+            [("P1", 0, 2), ("P2", 2, 4),
+             ("P3", 4, 5), ("P1", 5, 6)],
         )
 
-        first = manager.translate(123)
-        second = manager.translate(145)
-        manager.translate(201)
-        manager.translate(1)  # Evince la page 1, la moins recente du TLB.
-        after_eviction = manager.translate(145)
+    def test_idle_est_visible_avant_une_arrivee_tardive(self):
+        processus = [
+            {"nom": "P1", "arrivee": 2, "duree": 2, "priorite": 0},
+            {"nom": "P2", "arrivee": 4, "duree": 1, "priorite": 0},
+        ]
+        gantt, lignes = ordonnancer(processus, "fcfs")
+        self.assertEqual(gantt, [("IDLE", 0, 2), ("P1", 2, 4),
+                                 ("P2", 4, 5)])
+        self.assertEqual(lignes[0][-3:], (4, 0, 2))
 
-        self.assertEqual((first.page, first.offset, first.frame, first.physical_address), (1, 23, 7, 723))
-        self.assertFalse(first.tlb_hit)
-        self.assertTrue(second.tlb_hit)
-        self.assertFalse(after_eviction.tlb_hit)
-        self.assertEqual((manager.tlb_hits, manager.tlb_misses), (1, 4))
-        self.assertEqual(manager.tlb_entries, ((0, 5), (1, 7)))
-        self.assertAlmostEqual(manager.tlb_hit_ratio, 0.2)
-        self.assertAlmostEqual(manager.effective_access_time(10, 100), 190.0)
+    def test_entrees_invalides(self):
+        cas = [
+            ([], "fcfs", 2),
+            ([{"nom": "P", "arrivee": -1, "duree": 1, "priorite": 0}],
+             "fcfs", 2),
+            ([{"nom": "P", "arrivee": 0, "duree": 0, "priorite": 0}],
+             "fcfs", 2),
+            ([{"nom": "IDLE", "arrivee": 0, "duree": 1, "priorite": 0}],
+             "fcfs", 2),
+            (PROCESSUS_DEMO, "inconnu", 2),
+            (PROCESSUS_DEMO, "rr", 0),
+        ]
+        for processus, algorithme, quantum in cas:
+            with self.subTest(algorithme=algorithme, quantum=quantum):
+                with self.assertRaises(ValueError):
+                    ordonnancer(processus, algorithme, quantum)
 
-        missing = manager.translate(350)
-        self.assertTrue(missing.page_fault)
-        self.assertIsNone(missing.frame)
-        self.assertIsNone(missing.physical_address)
+    def test_saisie_optionnelle_sans_priorite(self):
+        processus = lire_processus("P1:0:3,P2:1:2:7")
+        self.assertEqual(
+            processus,
+            [
+                {"nom": "P1", "arrivee": 0, "duree": 3, "priorite": 0},
+                {"nom": "P2", "arrivee": 1, "duree": 2, "priorite": 7},
+            ],
+        )
 
-    def test_effective_access_time_rejects_non_finite_values_and_overflow(self):
-        manager = VirtualMemoryManager(64, {1: 2})
-        for tlb_time, memory_time in [
-            (float("nan"), 100),
-            (10, float("inf")),
-            (float("-inf"), 100),
-            (10, 1e308),
-        ]:
-            with self.subTest(tlb_time=tlb_time, memory_time=memory_time):
-                with self.assertRaises(VirtualMemoryError):
-                    manager.effective_access_time(tlb_time, memory_time)
 
-    def test_demo_shows_a_tlb_hit_and_a_page_fault(self):
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(main(["demo"]), 0)
+class MemoryTests(unittest.TestCase):
+    def test_remplacement_de_la_demonstration(self):
+        pages = [7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2]
+        fifo, _ = remplacer(pages, 3, "fifo")
+        lru, _ = remplacer(pages, 3, "lru")
+        optimal, _ = remplacer(pages, 3, "optimal")
+        self.assertEqual((fifo, lru, optimal), (10, 9, 7))
 
-        display = output.getvalue()
-        self.assertIn("adresse physique 139 (TLB hit)", display)
-        self.assertIn("page 4, deplacement 4 : DEFAUT DE PAGE", display)
-        self.assertIn("8, hits : 1, misses : 7", display)
-        self.assertIn("197.50 ns", display)
+    def test_traduction_tlb_et_eat_de_la_demonstration(self):
+        adresses = [5, 70, 75, 130, 5, 195, 70, 260]
+        table = {0: 5, 1: 2, 2: 7, 3: 1}
+        lignes, hits = traduire(adresses, 64, table, 2)
+        self.assertEqual(hits, 1)
+        self.assertEqual(lignes[2], (75, 1, 11, 2, 139, True))
+        self.assertIsNone(lignes[-1][4])
+        self.assertEqual(calculer_eat(hits, len(lignes)), 197.5)
 
 
 if __name__ == "__main__":
