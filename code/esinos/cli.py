@@ -24,7 +24,8 @@ def menu():
         print("2 Gestionnaire mémoire")
         print("3 Traduction, TLB et EAT")
         print("4 Système de fichiers à inodes")
-        print("5 Démonstration | 0 Quitter")
+        print("5 Démonstration")
+        print("0 Quitter")
         choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5"), "5")
         try:
             if choix == "0":
