@@ -1,7 +1,6 @@
 # ESINOS - mini-noyau simulé
 
 ESINOS 3.3 est une simulation en espace utilisateur, écrite en Python.
-Elle couvre les fonctions du [sujet du professeur](https://liaoux.github.io/it-intro-to-os/static_files/project/main.pdf) :
 
 - CPU : FCFS, SJF, Round Robin et Priority, Gantt et attentes/séjours moyens ;
 - mémoire : pagination, traduction logique vers physique, FIFO, LRU, Optimal, TLB et EAT ;
