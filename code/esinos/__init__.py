@@ -1,6 +1,6 @@
 """ESINOS utilise des fonctions, des listes et des dictionnaires."""
 
 from .scheduler import ordonnancer
-from .memory import remplacer, traduire, calculer_eat
+from .memory import remplacer, traduire, calculer_eat, calculer_eat_defauts
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"

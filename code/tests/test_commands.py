@@ -1,5 +1,6 @@
 """Vérifie les entrées publiques, les sous-menus et leurs résultats."""
 import re
+import os
 import subprocess
 import sys
 import unittest
@@ -12,7 +13,7 @@ CODE = Path(__file__).resolve().parents[1]
 def executer(*arguments, saisie=None):
     return subprocess.run(
         [sys.executable, "-B", "-m", "esinos", *arguments],
-        cwd=CODE, input=saisie, text=True, capture_output=True, timeout=15,
+        cwd=CODE, input=saisie, encoding="utf-8", capture_output=True, timeout=15,
     )
 
 
@@ -21,6 +22,18 @@ def texte_simple(texte):
 
 
 class CommandTests(unittest.TestCase):
+    def test_console_utf8_meme_avec_un_encodage_initial_ascii(self):
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "ascii"
+        resultat = subprocess.run(
+            [sys.executable, "-B", "-m", "esinos", "translate", "--page-size", "64",
+             "--page-table", "1:2", "--addresses", "70,75", "--explain"],
+            cwd=CODE, env=env, encoding="utf-8", capture_output=True, timeout=15,
+        )
+        self.assertEqual(resultat.returncode, 0, resultat.stderr)
+        self.assertIn("déplacement", resultat.stdout)
+        self.assertIn("p1→c2", resultat.stdout)
+
     def test_demonstration_complete(self):
         resultat = executer("demo")
         self.assertEqual(resultat.returncode, 0, resultat.stderr)

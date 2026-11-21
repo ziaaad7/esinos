@@ -1,11 +1,8 @@
-"""Mini disque ESINOS, ecrit avec des fonctions, listes et dictionnaires.
+"""Fichiers à inodes : binaire natif, compatibilité JSON et écritures atomiques.
 
-Le programme manipule une image interne tres simple : les noms des cles sont
-en francais et les inodes occupent directement une case de la liste. Au moment
-de sauvegarder, cette image est traduite vers le format JSON canonique du
-projet ESINOS (schema version 1, blocs Base64). Ainsi, l'atelier peut ouvrir
-une ancienne image francaise en hexadecimal et une image creee par le projet
-publie, puis les sauvegarder dans un format compatible.
+Le modèle en mémoire conserve des listes et des dictionnaires français.
+Le codec disque_binaire range les métadonnées et contenus dans des blocs.
+Les anciennes images JSON sont relues et gardent leur format à la sauvegarde.
 """
 
 import base64
@@ -16,9 +13,13 @@ import os
 import re
 import tempfile
 
+from .disque_binaire import MAGIC, encoder as encoder_binaire
+from .disque_binaire import decoder as decoder_binaire, geometrie as geometrie_binaire
+
 
 SCHEMA = "esinos-mini-filesystem"
 VERSION = 1
+TAILLE_MAX_IMAGE = 64 * 1024 * 1024
 NOM_SIMPLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -248,16 +249,31 @@ def _charger_image_debutant(image):
     return disque
 
 
+def format_disque(chemin):
+    """Identifie le format ; charger vérifie ensuite toute sa cohérence."""
+    with open(chemin, "rb") as fichier:
+        if fichier.read(len(MAGIC)) == MAGIC:
+            return "binaire"
+    return "json"
+
+
 def charger(chemin):
-    """Charge une image ancienne ou canonique et retourne le disque francais."""
+    """Relit le binaire natif ou les images JSON des versions précédentes."""
     try:
-        with open(chemin, "r", encoding="utf-8") as fichier:
-            image = json.load(fichier)
+        with open(chemin, "rb") as fichier:
+            octets = fichier.read(TAILLE_MAX_IMAGE + 1)
     except FileNotFoundError:
         raise FileNotFoundError("Image disque introuvable : " + str(chemin))
-    except (OSError, json.JSONDecodeError) as erreur:
+    if len(octets) > TAILLE_MAX_IMAGE:
+        raise ValueError("L'image dépasse la limite de 64 Mio.")
+    if octets.startswith(MAGIC):
+        disque = decoder_binaire(octets)
+        _verifier_image(disque)
+        return disque
+    try:
+        image = json.loads(octets.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as erreur:
         raise ValueError("Impossible de lire l'image disque : " + str(erreur))
-
     if not isinstance(image, dict):
         raise ValueError("Cette image doit contenir un dictionnaire JSON.")
     if image.get("schema") == SCHEMA:
@@ -289,31 +305,23 @@ def _image_canonique(disque):
     }
 
 
-def _ecrire_temporaire(chemin, image):
-    """Ecrit d'abord un JSON complet dans le repertoire de destination."""
+def _ecrire_temporaire(chemin, octets):
+    """Prépare l'image complète à côté de sa destination, puis synchronise."""
     destination = os.path.abspath(str(chemin))
     dossier = os.path.dirname(destination)
     nom = os.path.basename(destination)
+    os.makedirs(dossier, exist_ok=True)
+    descripteur, temporaire = tempfile.mkstemp(
+        prefix="." + nom + ".", suffix=".tmp", dir=dossier
+    )
     try:
-        os.makedirs(dossier, exist_ok=True)
-        descripteur, temporaire = tempfile.mkstemp(
-            prefix="." + nom + ".", suffix=".tmp", dir=dossier, text=True
-        )
-    except OSError as erreur:
-        raise OSError("Impossible de preparer l'image disque : " + str(erreur))
-
-    try:
-        with os.fdopen(descripteur, "w", encoding="utf-8") as fichier:
-            json.dump(image, fichier, ensure_ascii=False, indent=2, sort_keys=True)
-            fichier.write("\n")
+        with os.fdopen(descripteur, "wb") as fichier:
+            fichier.write(octets)
             fichier.flush()
             os.fsync(fichier.fileno())
-    except OSError as erreur:
-        try:
-            os.unlink(temporaire)
-        except OSError:
-            pass
-        raise OSError("Impossible d'ecrire l'image disque : " + str(erreur))
+    except OSError:
+        _supprimer_temporaire(temporaire)
+        raise
     return temporaire, destination
 
 
@@ -327,44 +335,63 @@ def _supprimer_temporaire(temporaire):
 
 
 def sauvegarder(chemin, disque):
-    """Valide puis remplace l'image entiere d'un seul coup."""
+    """Valide puis remplace toute l'image en conservant son format."""
     _verifier_image(disque)
-    image = _image_canonique(disque)
-    temporaire, destination = _ecrire_temporaire(chemin, image)
+    if format_disque(chemin) == "binaire":
+        octets = encoder_binaire(disque)
+    else:
+        image = _image_canonique(disque)
+        texte = json.dumps(image, ensure_ascii=False, indent=2, sort_keys=True)
+        octets = (texte + "\n").encode("utf-8")
+    temporaire, destination = _ecrire_temporaire(chemin, octets)
     try:
         os.replace(temporaire, destination)
-    except OSError as erreur:
-        raise OSError("Impossible de publier l'image disque : " + str(erreur))
     finally:
         _supprimer_temporaire(temporaire)
 
 
-def initialiser(chemin, nombre_blocs=64, taille_bloc=64, nombre_inodes=16):
-    """Cree une image neuve sans ecraser un chemin deja occupe."""
-    _verifier_entier_positif(nombre_blocs, "Le nombre de blocs")
-    _verifier_entier_positif(taille_bloc, "La taille de bloc")
-    _verifier_entier_positif(nombre_inodes, "Le nombre d'inodes")
-
-    disque = {
-        "taille_bloc": taille_bloc,
-        "blocs": [None] * nombre_blocs,
-        "inodes": [None] * nombre_inodes,
-    }
-    _verifier_image(disque)
-    image = _image_canonique(disque)
-    temporaire, destination = _ecrire_temporaire(chemin, image)
+def _publier_nouveau(chemin, disque):
+    """Publie une image binaire avec création exclusive, sans écrasement."""
+    octets = encoder_binaire(disque)
+    temporaire, destination = _ecrire_temporaire(chemin, octets)
     try:
         try:
-            # link est atomique : deux initialisations ne peuvent pas gagner.
             os.link(temporaire, destination)
         except FileExistsError:
             raise FileExistsError("Refus d'ecraser une image disque existante.")
         except OSError as erreur:
             if erreur.errno == errno.EEXIST:
                 raise FileExistsError("Refus d'ecraser une image disque existante.")
-            raise OSError("Impossible de creer l'image disque : " + str(erreur))
+            raise
     finally:
         _supprimer_temporaire(temporaire)
+
+
+def initialiser(chemin, nombre_blocs=64, taille_bloc=64, nombre_inodes=16):
+    """Crée un disque binaire. Le nombre de blocs désigne les données."""
+    _verifier_entier_positif(nombre_blocs, "Le nombre de blocs")
+    _verifier_entier_positif(taille_bloc, "La taille de bloc")
+    _verifier_entier_positif(nombre_inodes, "Le nombre d'inodes")
+    if nombre_blocs > 65536 or nombre_inodes > 4096:
+        raise ValueError("La géométrie dépasse les limites du simulateur.")
+    if nombre_blocs * taille_bloc > TAILLE_MAX_IMAGE:
+        raise ValueError("La zone de données dépasse 64 Mio.")
+    disque = {
+        "taille_bloc": taille_bloc,
+        "blocs": [None] * nombre_blocs,
+        "inodes": [None] * nombre_inodes,
+    }
+    _verifier_image(disque)
+    _publier_nouveau(chemin, disque)
+    return disque
+
+
+def migrer_json(source, destination):
+    """Copie un ancien JSON vers un nouveau binaire, sans modifier l'original."""
+    if format_disque(source) != "json":
+        raise ValueError("La source doit être une ancienne image JSON.")
+    disque = charger(source)
+    _publier_nouveau(destination, disque)
     return disque
 
 
@@ -473,6 +500,9 @@ def etat_disque(chemin):
         if inode is not None:
             inodes_utilises += 1
     return {
+        "format": format_disque(chemin),
+        "geometrie": geometrie_binaire(disque)
+        if format_disque(chemin) == "binaire" else None,
         "taille_bloc": disque["taille_bloc"],
         "nombre_blocs": len(disque["blocs"]),
         "blocs_utilises": blocs_utilises,

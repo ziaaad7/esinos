@@ -11,6 +11,18 @@ def verifier_entier(valeur, nom, minimum=0):
         raise ValueError(nom + " est trop petit.")
 
 
+def verifier_temps(temps):
+    """Vérifie un temps numérique, fini et positif ou nul."""
+    if type(temps) is not int and type(temps) is not float:
+        raise ValueError("Les temps doivent être des nombres.")
+    try:
+        fini = isfinite(temps)
+    except OverflowError:
+        fini = False
+    if temps < 0 or not fini:
+        raise ValueError("Les temps doivent être positifs ou nuls.")
+
+
 def cadre_a_remplacer(cadres, pages, indice, algorithme, fifo, dernier_usage):
     """Choisit la position du cadre libre ou de la victime."""
     if None in cadres:
@@ -162,19 +174,32 @@ def calculer_eat(hits, acces, temps_tlb=10, temps_memoire=100):
         raise ValueError("Les hits ne peuvent pas dépasser les accès.")
 
     for temps in (temps_tlb, temps_memoire):
-        if type(temps) is not int and type(temps) is not float:
-            raise ValueError("Les temps doivent être des nombres.")
-        try:
-            fini = isfinite(temps)
-        except OverflowError:
-            fini = False
-        if temps < 0 or not fini:
-            raise ValueError("Les temps doivent être positifs ou nuls.")
+        verifier_temps(temps)
 
     taux_hit = hits / acces
     # Forme regroupée de la moyenne des coûts hit et miss.
     resultat = temps_tlb + (2 - taux_hit) * temps_memoire
 
+    if not isfinite(resultat):
+        raise ValueError("Le résultat EAT doit être fini.")
+    return resultat
+
+
+def calculer_eat_defauts(taux_defaut, temps_memoire=100, temps_defaut=1000000):
+    """Calcule l'EAT avec le temps total de traitement d'un défaut."""
+    if type(taux_defaut) is not int and type(taux_defaut) is not float:
+        raise ValueError("Le taux de défaut doit être un nombre.")
+    try:
+        fini = isfinite(taux_defaut)
+    except OverflowError:
+        fini = False
+    if not fini or taux_defaut < 0 or taux_defaut > 1:
+        raise ValueError("Le taux de défaut doit être compris entre 0 et 1.")
+
+    verifier_temps(temps_memoire)
+    verifier_temps(temps_defaut)
+    resultat = ((1 - taux_defaut) * temps_memoire
+                + taux_defaut * temps_defaut)
     if not isfinite(resultat):
         raise ValueError("Le résultat EAT doit être fini.")
     return resultat

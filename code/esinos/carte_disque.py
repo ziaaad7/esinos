@@ -6,7 +6,48 @@ fichiers. Il ne reserve aucun bloc supplementaire et ne modifie jamais le JSON.
 
 import base64
 
-from .filesystem import charger, chercher_inode
+from .filesystem import charger, chercher_inode, format_disque
+from .disque_binaire import geometrie
+
+
+def carte_physique(disque):
+    """Montre les zones réservées et leur position avant les données."""
+    geo = geometrie(disque)
+    zones = [
+        ("S", "Superbloc", 0, geo["blocs_superbloc"]),
+        ("B", "Bitmap", geo["bloc_bitmap"], geo["blocs_bitmap"]),
+        ("I", "Inodes", geo["bloc_inodes"], geo["blocs_inodes"]),
+        ("R", "Répertoire", geo["bloc_repertoire"], geo["blocs_repertoire"]),
+    ]
+    lignes = ["STRUCTURE PHYSIQUE DU DISQUE BINAIRE"]
+    for symbole, nom, debut, nombre in zones:
+        lignes.append(f"{symbole} {nom} : blocs {debut} à {debut + nombre - 1}")
+    lignes.append(f"Données : blocs {geo['data_start']} à "
+                  f"{geo['nombre_blocs_physiques'] - 1}")
+    lignes.append(f"Image : {geo['taille_image']} octets, "
+                  f"{geo['nombre_blocs_physiques']} blocs physiques.")
+    if geo["nombre_blocs_physiques"] <= 256:
+        debut = 0
+        while debut < geo["nombre_blocs_physiques"]:
+            fin = min(debut + 16, geo["nombre_blocs_physiques"])
+            cases = ""
+            for numero in range(debut, fin):
+                symbole = "."
+                if numero >= geo["data_start"]:
+                    if disque["blocs"][numero - geo["data_start"]] is not None:
+                        symbole = "#"
+                else:
+                    for lettre, nom, premiere, nombre in zones:
+                        if premiere <= numero < premiere + nombre:
+                            symbole = lettre
+                            break
+                cases += symbole
+            lignes.append(f"physique {debut}-{fin - 1} : {cases}")
+            debut = fin
+    else:
+        lignes.append("La carte physique est condensée dans les zones ci-dessus.")
+    lignes.append(f"Bloc de données logique 0 -> bloc physique {geo['data_start']}.")
+    return "\n".join(lignes)
 
 
 def carte_blocs(chemin):
@@ -16,7 +57,10 @@ def carte_blocs(chemin):
     inodes = disque["inodes"]
     lignes = []
 
-    lignes.append("CARTE DES BLOCS")
+    if format_disque(chemin) == "binaire":
+        lignes.append(carte_physique(disque))
+
+    lignes.append("CARTE DES BLOCS DE DONNÉES (NUMÉROS LOGIQUES)")
     lignes.append("Legende : # occupe | . libre")
     lignes.append("Chaque caractere represente un bloc numerote.")
 
@@ -80,6 +124,14 @@ def explication_fichier(chemin, nom):
     lignes.append("Capacite d'un bloc : " + str(taille_bloc) + " octets")
     lignes.append("Nombre de blocs : " + str(nombre_blocs))
     lignes.append("Contenu UTF-8 assemble : " + texte)
+
+    if format_disque(chemin) == "binaire":
+        geo = geometrie(disque)
+        for numero_bloc in inode["blocs"]:
+            physique = geo["data_start"] + numero_bloc
+            position = physique * taille_bloc
+            lignes.append(f"Logique {numero_bloc} -> physique {physique}, "
+                          f"position {position} octets dans l'image.")
 
     if nombre_blocs == 0:
         lignes.append("Aucun bloc : fichier vide.")
