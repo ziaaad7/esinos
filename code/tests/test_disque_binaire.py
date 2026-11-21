@@ -64,6 +64,7 @@ class DisqueBinaireTests(unittest.TestCase):
         }
         image = binaire.encoder(disque)
         self.assertTrue(image.startswith(binaire.MAGIC))
+        self.assertEqual(binaire.verifier(disque), disque)
         self.assertEqual(binaire.decoder(image), disque)
 
     def test_tres_petits_blocs_et_geometrie_physique(self):

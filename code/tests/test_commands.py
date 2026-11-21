@@ -26,8 +26,7 @@ class CommandTests(unittest.TestCase):
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "ascii"
         resultat = subprocess.run(
-            [sys.executable, "-B", "-m", "esinos", "translate", "--page-size", "64",
-             "--page-table", "1:2", "--addresses", "70,75", "--explain"],
+            [sys.executable, "-B", "-m", "esinos", "demo", "--explain"],
             cwd=CODE, env=env, encoding="utf-8", capture_output=True, timeout=15,
         )
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
@@ -45,51 +44,6 @@ class CommandTests(unittest.TestCase):
                         "notes.txt | 40 | [0, 1, 2]",
                         "0-11 : ###.........", "0-11 : ............"):
             self.assertIn(attendu, texte)
-
-    def test_commandes_cpu_et_memoire(self):
-        cpu = executer("scheduler", "--algorithm", "rr", "--quantum", "2",
-                       "--processes", "A:0:3,B:1:2,C:2:1")
-        self.assertEqual(cpu.returncode, 0, cpu.stderr)
-        self.assertIn("| A ", cpu.stdout)
-        for bornes in ("0 -> 2", "2 -> 4", "4 -> 5", "5 -> 6"):
-            self.assertIn(bornes, cpu.stdout)
-        self.assertIn("Attente moyenne : 2.00", cpu.stdout)
-        priorite = executer("scheduler", "--algorithm", "priorite",
-                            "--processes", "A:0:1:2,B:0:1:1")
-        self.assertEqual(priorite.returncode, 0, priorite.stderr)
-        self.assertIn("PRIORITE", priorite.stdout)
-        memoire = executer("memory", "--references", "1,2,1,3,1",
-                           "--frames", "2", "--algorithm", "lru")
-        self.assertEqual(memoire.returncode, 0, memoire.stderr)
-        self.assertIn("LRU : 3", memoire.stdout)
-
-    def test_tlb_desactive_et_page_absente(self):
-        resultat = executer("translate", "--addresses", "17,19,55",
-                            "--page-size", "16", "--page-table", "1:0",
-                            "--tlb-size", "0", "--explain")
-        self.assertEqual(resultat.returncode, 0, resultat.stderr)
-        self.assertIn("17 | 1 | 1 | 0 | 1 | miss", texte_simple(resultat.stdout))
-        self.assertIn("défaut de page", resultat.stdout)
-        self.assertIn("0/3", resultat.stdout)
-        self.assertIn("210.00", resultat.stdout)
-        self.assertIn("désactivé", resultat.stdout)
-
-    def test_erreurs_recuperables(self):
-        for valeur in ("nan", "inf", "-inf"):
-            resultat = executer("translate", "--addresses", "1", "--page-size", "4",
-                                "--page-table", "0:0", "--tlb-time=" + valeur)
-            self.assertEqual(resultat.returncode, 2)
-            self.assertIn("Erreur", resultat.stderr)
-            self.assertNotIn("Traceback", resultat.stderr)
-        for arguments in [
-            ("scheduler", "--algorithm", "rr", "--processes", "P:0:1"),
-            ("memory", "--references", "1,-2", "--frames", "3",
-             "--algorithm", "fifo"),
-        ]:
-            resultat = executer(*arguments)
-            self.assertEqual(resultat.returncode, 2)
-            self.assertIn("Erreur", resultat.stderr)
-            self.assertNotIn("Traceback", resultat.stderr)
 
     def test_menu_rr_redemande_un_quantum_valide(self):
         resultat = executer(saisie="1\n3\n0\n2\n1\n0\n0\n")
@@ -150,26 +104,22 @@ class CommandTests(unittest.TestCase):
         self.assertIn("197.50 ns", resultat.stdout)
         self.assertNotIn("Entrée : suite", resultat.stdout)
 
-    def test_fichiers_entre_plusieurs_commandes(self):
-        with TemporaryDirectory() as dossier:
-            image = str(Path(dossier) / "disque.json")
-            base = ("fs", "--disk", image)
-            creation = executer(*base, "--blocks", "4", "--block-size", "2",
-                               "--inodes", "2", "init")
-            self.assertEqual(creation.returncode, 0, creation.stderr)
-            self.assertEqual(executer(*base, "create", "notes", "aé").returncode, 0)
-            self.assertEqual(executer(*base, "read", "notes").stdout.strip(), "aé")
-            self.assertIn("[0, 1]", executer(*base, "inodes").stdout)
-            self.assertIn("0-3 : ##..", executer(*base, "map").stdout)
-            parcours = executer(*base, "explain", "notes")
-            self.assertEqual(parcours.returncode, 0, parcours.stderr)
-            self.assertIn("aé", parcours.stdout)
-            self.assertIn("Bloc 1 : 1/2", parcours.stdout)
-            self.assertEqual(executer(*base, "init").returncode, 2)
-            self.assertEqual(executer(*base, "read", "notes").stdout.strip(), "aé")
-            self.assertEqual(executer(*base, "delete", "notes").returncode, 0)
-            self.assertIn("libre", executer(*base, "inodes").stdout)
-            self.assertIn("0-3 : ....", executer(*base, "map").stdout)
+    def test_aide_version_et_commandes_secondaires_retirees(self):
+        aide = executer("--help")
+        self.assertEqual(aide.returncode, 0)
+        self.assertIn("demo", aide.stdout)
+        self.assertIn("ESINOS 3.1.0", executer("--version").stdout)
+        for commande in ("scheduler", "memory", "translate", "eat", "fs"):
+            resultat = executer(commande)
+            self.assertEqual(resultat.returncode, 2)
+            self.assertNotIn("Traceback", resultat.stderr)
+
+    def test_menu_eat_defauts_redemande_un_taux_valide(self):
+        saisie = "6\n1.2\nnan\n0.001\n100\n1000000\n0\n"
+        resultat = executer(saisie=saisie)
+        self.assertEqual(resultat.returncode, 0, resultat.stderr)
+        self.assertIn("Le taux doit être compris entre 0 et 1", resultat.stdout)
+        self.assertIn("1099.90 ns", resultat.stdout)
 
 
 if __name__ == "__main__":

@@ -3,4 +3,4 @@
 from .scheduler import ordonnancer
 from .memory import remplacer, traduire, calculer_eat, calculer_eat_defauts
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"

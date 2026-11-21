@@ -1,5 +1,0 @@
-"""Jeux de données reproductibles partagés par les menus et la démo."""
-PROCESSUS = "P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2"
-PAGES = "7,0,1,2,0,3,0,4,2,3,0,3,2"
-ADRESSES = "5,70,75,130,5,195,70,260"
-TABLE = "0:5,1:2,2:7,3:1"

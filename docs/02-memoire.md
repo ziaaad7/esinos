@@ -1,144 +1,61 @@
-# Mémoire virtuelle, TLB et les deux EAT
+# Mémoire virtuelle
+
+Les choix 2, 3 et 6 du menu principal traitent respectivement le remplacement
+de pages, la traduction d'adresses et l'EAT avec défauts.
 
 ## Remplacement de pages
 
-Une page est une partie de l’espace logique. Un cadre est une place de même
-taille dans la mémoire simulée. Lorsqu’une page demandée est déjà dans les
-cadres, c’est un hit. Sinon, c’est un défaut de page. S’il ne reste aucun cadre
-libre, une politique choisit une victime.
+Le sous-menu 2 propose FIFO, LRU, Optimal et leur comparaison. Le choix 5
+change les pages et le nombre de cadres ; le choix 6 restaure l'exemple.
 
-~~~text
-remplacer(pages, nombre_cadres, algorithme)
-    -> (nombre_defauts, trace)
-~~~
+- FIFO retire la page chargée la première.
+- LRU retire la page utilisée le moins récemment.
+- Optimal retire la page dont la prochaine utilisation est la plus lointaine.
+  Il suppose que le futur est connu et sert de référence théorique.
 
-La trace contient une étape par référence :
+Chaque accès montre le hit ou défaut, la victime éventuelle et l'état des
+cadres. Les modes Expliqué et Pas à pas détaillent la raison de l'éviction.
+Sur 7,0,1,2,0,3,0,4,2,3,0,3,2 avec trois cadres, les défauts valent 10, 9 et 7.
 
-~~~text
-(page, hit, victime, cadres_apres)
-~~~
+## Traduction et TLB
 
-La victime vaut None lorsque le défaut utilise encore un cadre libre. Les trois
-algorithmes acceptés sont fifo, lru et optimal.
+Dans le sous-menu 3, le choix 1 lance l'exemple et le choix 2 modifie ses
+paramètres : adresses, taille de page, table, capacité du TLB et temps d'accès.
 
-- FIFO sort le cadre chargé depuis le plus longtemps.
-- LRU sort la page utilisée le moins récemment.
-- Optimal sort la page dont la prochaine utilisation est la plus lointaine,
-  ou qui ne revient jamais. Il sert de référence théorique car il connaît la
-  suite future.
-
-Avec les références 7,0,1,2,0,3,0,4,2,3,0,3,2 et trois cadres, les défauts sont
-10 pour FIFO, 9 pour LRU et 7 pour Optimal.
-
-## Sous-menu remplacement
-
-| Choix | Action |
-| --- | --- |
-| 1 à 3 | FIFO, LRU, Optimal |
-| 4 | Comparer les trois algorithmes |
-| 5 | Modifier références et cadres |
-| 6 | Restaurer l’exemple |
-| 0 | Retour |
-
-Le mode Expliqué part de la trace retournée par le calcul. Il montre l’état
-avant et après. Sur un hit, il précise que FIFO ne change pas l’ordre et que
-LRU rafraîchit la page. Pour Optimal, il explique le futur et les égalités sont
-départagées par le plus petit numéro de cadre.
-
-~~~bash
-python3 -m esinos memory --algorithm fifo --frames 3 \
-  --references "7,0,1,2,0,3,0,4,2,3,0,3,2" --explain
-~~~
-
-## Traduire une adresse
-
-Une adresse logique se sépare par division entière et modulo.
-
-~~~text
+```text
 page = adresse // taille_page
 déplacement = adresse % taille_page
-adresse_physique = cadre * taille_page + déplacement
-~~~
+adresse physique = cadre × taille_page + déplacement
+```
 
-Le contrat est :
+Le TLB garde les traductions récentes et utilise LRU. Une capacité de 0
+désactive ce cache. Le cadre 0 est valide. Une page non représentée dans la
+table est signalée comme absente dans ce modèle ; son adresse physique vaut None.
 
-~~~text
-traduire(adresses, taille_page, table_pages, capacite_tlb=2)
-    -> (lignes, hits)
-~~~
+Avec une taille de page de 64 et la page 1 dans le cadre 2, l'adresse 70 donne
+134. L'adresse 75 donne 139 et réutilise la traduction, donc produit un hit.
+La démonstration complète obtient 1 hit sur 8 accès.
 
-Chaque ligne est :
+## Deux modèles d'EAT
 
-~~~text
-(adresse, page, déplacement, cadre, adresse_physique, hit_tlb)
-~~~
+Le modèle TLB exclut le délai de chargement d'une page et utilise le taux h :
 
-La table associe une page à un cadre. Le cadre 0 est valide. Si la page est
-absente de la table, le cadre et l’adresse physique sont None. Cet accès est un
-miss du point de vue du taux TLB.
+```text
+EAT_TLB = temps_TLB + (2 - h) × temps_mémoire
+```
 
-Le TLB garde les traductions récentes avec LRU. Une capacité de 0 désactive le
-cache sans empêcher la traduction par la table des pages.
+Avec 10 ns de TLB, 100 ns de mémoire et h=1/8, il donne 197,50 ns.
+Un accès à une page absente compte comme un miss dans cette expérience.
 
-~~~bash
-python3 -m esinos translate --page-size 64 --page-table "0:5,1:2,2:7,3:1" \
-  --addresses "5,70,75,130,5,195,70,260" --tlb-size 2 --explain
-~~~
+Le choix 6 du menu principal étudie séparément le taux de défaut p :
 
-Dans cet exemple, l’adresse 75 est traduite en 139 et réutilise l’entrée de la
-page 1. La page 4 demandée par 260 est absente. Le résultat est 1 hit sur 8.
+```text
+EAT_défauts = (1 - p) × temps_mémoire + p × temps_défaut
+```
 
-Le sous-menu traduction permet de lancer le scénario, modifier adresses, taille,
-table, capacité et temps, puis restaurer l’exemple. Les explications montrent
-quotient, reste, TLB avant et après, hit ou miss et éviction LRU.
+temps_défaut est le coût TOTAL du traitement d'un accès avec défaut. Pour
+p=0,001, mémoire=100 ns et défaut=1 000 000 ns, le résultat est 1 099,90 ns.
+Ces deux modèles ne sont pas additionnés automatiquement. Les temps non finis
+ou négatifs et les taux hors de 0 à 1 sont refusés.
 
-## EAT TLB
-
-Le premier modèle mesure seulement le coût de la recherche de traduction et des
-accès mémoire. Il ne facture pas le chargement depuis le disque.
-
-~~~text
-calculer_eat(hits, acces, temps_tlb=10, temps_memoire=100)
-EAT = temps_tlb + (2 - taux_hit) * temps_memoire
-~~~
-
-Un hit coûte temps_tlb + temps_memoire. Un miss coûte temps_tlb +
-2 * temps_memoire, car la table puis la donnée sont consultées. Avec 1 hit sur
-8, 10 ns de TLB et 100 ns de mémoire, l’EAT est 197.50 ns.
-
-## EAT avec défauts de page
-
-Le second modèle est distinct. Il utilise un taux de défaut et le temps total
-du traitement complet d’un défaut.
-
-~~~text
-calculer_eat_defauts(
-    taux_defaut,
-    temps_memoire=100,
-    temps_defaut=1000000
-)
-EAT = (1 - taux_defaut) * temps_memoire
-      + taux_defaut * temps_defaut
-~~~
-
-temps_defaut est déjà le traitement total du défaut. Il ne faut pas lui ajouter
-temps_memoire une seconde fois. Le taux doit être fini et compris entre 0 et 1.
-Les deux temps doivent être finis et positifs ou nuls.
-
-Le choix 6 du menu principal ouvre ce calcul. La même opération est disponible
-dans le Terminal.
-
-~~~bash
-python3 -m esinos eat --fault-rate 0.001 --memory-time 100 \
-  --fault-time 1000000
-~~~
-
-Le calcul est :
-
-~~~text
-0,999 × 100 + 0,001 × 1 000 000 = 1099,90 ns
-~~~
-
-Ce modèle ne remplace pas l’EAT TLB. Les deux répondent à des questions
-différentes et sont affichés séparément.
-
+memory.py effectue les calculs ; pedagogie.py explique leurs traces.
