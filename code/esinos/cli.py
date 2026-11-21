@@ -52,15 +52,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="ESINOS - mini-noyau simulé")
     parser.add_argument("commande", nargs="?", default="interactive",
                         choices=["interactive", "demo"])
-    parser.add_argument("--explain", action="store_true",
-                        help="expliquer automatiquement la démonstration")
     parser.add_argument("--version", action="version", version="ESINOS " + __version__)
     choix = parser.parse_args(argv)
-    if choix.explain and choix.commande != "demo":
-        parser.error("--explain s'utilise avec demo.")
     try:
         if choix.commande == "demo":
-            demonstration("explique" if choix.explain else "resume")
+            demonstration()
         else:
             menu()
         return 0

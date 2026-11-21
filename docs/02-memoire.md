@@ -14,8 +14,8 @@ change les pages et le nombre de cadres ; le choix 6 restaure l'exemple.
   Il suppose que le futur est connu et sert de référence théorique.
 
 Chaque accès montre le hit ou défaut, la victime éventuelle et l'état des
-cadres. Les modes Expliqué et Pas à pas détaillent la raison de l'éviction.
-Sur 7,0,1,2,0,3,0,4,2,3,0,3,2 avec trois cadres, les défauts valent 10, 9 et 7.
+cadres. Sur 7,0,1,2,0,3,0,4,2,3,0,3,2 avec trois cadres, les défauts valent
+10, 9 et 7. Les guides d'apprentissage détaillent la raison des évictions.
 
 ## Traduction et TLB
 
@@ -58,4 +58,4 @@ p=0,001, mémoire=100 ns et défaut=1 000 000 ns, le résultat est 1 099,90 ns.
 Ces deux modèles ne sont pas additionnés automatiquement. Les temps non finis
 ou négatifs et les taux hors de 0 à 1 sont refusés.
 
-memory.py effectue les calculs ; pedagogie.py explique leurs traces.
+memory.py effectue les calculs et les tableaux affichent leurs traces.

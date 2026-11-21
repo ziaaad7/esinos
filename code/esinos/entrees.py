@@ -96,10 +96,3 @@ def demander_liste(question, defaut):
             return liste_entiers(lire_avec_defaut(question, defaut))
         except ValueError as erreur:
             print("Erreur :", erreur)
-
-
-def choisir_mode():
-    print("1 Résumé | 2 Expliqué | 3 Pas à pas")
-    choix = demander_choix("Affichage", ("1", "2", "3"), "1")
-    modes = {"1": "resume", "2": "explique", "3": "pasapas"}
-    return modes[choix]

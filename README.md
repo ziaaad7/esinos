@@ -1,6 +1,6 @@
 # ESINOS - mini-noyau simulé
 
-ESINOS 3.1 simule l'ordonnancement CPU, la mémoire virtuelle et le bonus de
+ESINOS 3.2 simule l'ordonnancement CPU, la mémoire virtuelle et le bonus de
 système de fichiers à inodes. Le programme utilise uniquement Python 3.9 ou
 plus récent et sa bibliothèque standard.
 
@@ -35,15 +35,13 @@ python3 -m esinos
 | 6 | EAT avec défauts de page |
 | 0 | Quitter |
 
-Les sous-menus commencent avec un exemple. Entrée conserve une valeur proposée.
-Le mode Résumé affiche les résultats ; Expliqué ajoute les raisons ; Pas à pas
-attend Entrée entre deux décisions. Dans ce dernier mode, t affiche la suite
-et 0 revient au menu.
+Les sous-menus commencent avec un exemple. Entrée conserve une valeur proposée
+et 0 revient au menu principal.
 
 Pour rejouer les exemples sans saisie :
 
 ```bash
-python3 -m esinos demo --explain
+python3 -m esinos demo
 ```
 
 ## Organisation et guides
@@ -51,11 +49,11 @@ python3 -m esinos demo --explain
 - `scheduler.py` et `memory.py` : calculs des simulations.
 - `filesystem.py` et `disque_binaire.py` : fichiers et image disque.
 - `menus.py`, `entrees.py` et `cli.py` : navigation et commandes.
-- `affichage.py`, `sorties.py`, `pedagogie.py`, `carte_disque.py` : résultats lisibles.
+- `affichage.py`, `sorties.py` et `carte_disque.py` : résultats lisibles.
 
 Les guides détaillent [le CPU](docs/01-ordonnancement.md),
 [la mémoire](docs/02-memoire.md) et [les fichiers](docs/03-fichiers.md).
-`python3 -m esinos --help` présente aussi les commandes du Terminal.
+`python3 -m esinos --help` présente la syntaxe de lancement.
 
 ## Vérification et livrables
 

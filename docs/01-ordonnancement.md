@@ -37,8 +37,8 @@ séjour = CT - AT
 attente = séjour - BT
 ```
 
-Le mode Expliqué justifie chaque décision. Pas à pas attend Entrée entre
-les étapes ; t affiche le reste et 0 revient au sous-menu.
+Le Gantt et le tableau rendent le résultat directement lisible. Les guides
+d'apprentissage du dépôt détaillent les règles de choix et les traces.
 
 ## Exemple reproductible
 

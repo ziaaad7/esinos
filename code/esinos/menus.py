@@ -3,7 +3,7 @@ import os
 from tempfile import TemporaryDirectory
 from .entrees import lire_processus, lire_avec_defaut, lire_table, liste_entiers
 from .entrees import demander_choix, demander_entier, demander_temps
-from .entrees import demander_liste, choisir_mode
+from .entrees import demander_liste
 from .sorties import titre, afficher_cpu, comparer_cpu, afficher_remplacement
 from .sorties import comparer_remplacement, afficher_traduction, afficher_eat_defauts
 from .sorties import afficher_fichiers, afficher_inodes, afficher_etat
@@ -62,7 +62,7 @@ def menu_cpu():
                 comparer_cpu(processus, quantum)
             else:
                 algorithmes = {"1": "fcfs", "2": "sjf", "3": "rr", "4": "priorite"}
-                afficher_cpu(processus, algorithmes[choix], quantum, choisir_mode())
+                afficher_cpu(processus, algorithmes[choix], quantum)
 
 
 def menu_remplacement():
@@ -87,7 +87,7 @@ def menu_remplacement():
             comparer_remplacement(pages, cadres)
         else:
             algorithmes = {"1": "fifo", "2": "lru", "3": "optimal"}
-            afficher_remplacement(pages, cadres, algorithmes[choix], choisir_mode())
+            afficher_remplacement(pages, cadres, algorithmes[choix])
 
 
 def menu_traduction():
@@ -105,7 +105,7 @@ def menu_traduction():
             return
         if choix == "1":
             afficher_traduction(adresses, taille, table, capacite,
-                                temps_tlb, temps_memoire, choisir_mode())
+                                temps_tlb, temps_memoire)
         elif choix == "2":
             adresses = demander_liste("Adresses", " ".join(map(str, adresses)))
             taille = demander_entier("Taille de page en octets", taille, 1)
@@ -201,18 +201,14 @@ def menu_disque(chemin):
             print("Erreur :", erreur)
 
 
-def demonstration(mode="resume"):
+def demonstration():
     titre("ESINOS - DÉMONSTRATION")
     processus = lire_processus(PROCESSUS)
     comparer_cpu(processus, 2)
-    if mode != "resume":
-        afficher_cpu(processus, "rr", 2, mode)
-
     pages = liste_entiers(PAGES)
-    afficher_remplacement(pages, 3, "fifo", mode)
+    afficher_remplacement(pages, 3, "fifo")
     comparer_remplacement(pages, 3)
-    afficher_traduction(liste_entiers(ADRESSES), 64, lire_table(TABLE), 2,
-                        mode=mode)
+    afficher_traduction(liste_entiers(ADRESSES), 64, lire_table(TABLE), 2)
 
     afficher_eat_defauts(0.001, 100, 1000000)
 

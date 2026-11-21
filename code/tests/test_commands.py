@@ -26,12 +26,12 @@ class CommandTests(unittest.TestCase):
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "ascii"
         resultat = subprocess.run(
-            [sys.executable, "-B", "-m", "esinos", "demo", "--explain"],
+            [sys.executable, "-B", "-m", "esinos", "demo"],
             cwd=CODE, env=env, encoding="utf-8", capture_output=True, timeout=15,
         )
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
-        self.assertIn("déplacement", resultat.stdout)
-        self.assertIn("p1→c2", resultat.stdout)
+        self.assertIn("Déplacement", resultat.stdout)
+        self.assertIn("Séjour moyen", resultat.stdout)
 
     def test_demonstration_complete(self):
         resultat = executer("demo")
@@ -46,17 +46,18 @@ class CommandTests(unittest.TestCase):
             self.assertIn(attendu, texte)
 
     def test_menu_rr_redemande_un_quantum_valide(self):
-        resultat = executer(saisie="1\n3\n0\n2\n1\n0\n0\n")
+        resultat = executer(saisie="1\n3\n0\n2\n0\n0\n")
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
         self.assertIn("La valeur doit être au moins 1", resultat.stdout)
         self.assertIn("GANTT", resultat.stdout)
         self.assertIn("Attente moyenne : 5.00", resultat.stdout)
+        self.assertNotIn("Expliqué", resultat.stdout)
 
     def test_saisie_cpu_guidee_et_comparaison_persistante(self):
         reponses = ["1", "6", "2",
                     "A", "3", "2", "2",
                     "B", "4", "1", "1",
-                    "5", "2", "1", "1", "0", "0"]
+                    "5", "2", "1", "0", "0"]
         resultat = executer(saisie="\n".join(reponses) + "\n")
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
         texte = texte_simple(resultat.stdout)
@@ -65,50 +66,33 @@ class CommandTests(unittest.TestCase):
         self.assertIn("B | 4 | 1 | 1 | 6 | 1 | 2", texte)
         self.assertIn("FCFS | 0.50 | 2.00", texte)
 
-    def test_mode_pas_a_pas_peut_continuer_et_revenir(self):
-        resultat = executer(saisie="1\n3\n2\n3\n\nt\n0\n0\n")
-        self.assertEqual(resultat.returncode, 0, resultat.stderr)
-        self.assertIn("File suivante", resultat.stdout)
-        self.assertIn("reste 7 -> 5", resultat.stdout)
-        self.assertEqual(resultat.stdout.count("Entrée : suite"), 2)
-        arret = executer(saisie="1\n1\n3\n0\n4\n1\n0\n0\n")
-        self.assertEqual(arret.returncode, 0, arret.stderr)
-        self.assertEqual(arret.stdout.count("GANTT"), 1)
-        self.assertIn("Attente moyenne : 5.50", arret.stdout)
-
     def test_menu_memoire_compare_les_donnees_saisies(self):
-        resultat = executer(saisie="2\n5\n1 2 1 3 1\n2\n4\n2\n2\n0\n0\n")
+        resultat = executer(saisie="2\n5\n1 2 1 3 1\n2\n4\n2\n0\n0\n")
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
         texte = texte_simple(resultat.stdout)
         self.assertIn("FIFO | 4 | 1", texte)
         self.assertIn("LRU | 3 | 2", texte)
         self.assertIn("LRU : 3 défauts", texte)
-        self.assertIn("la page 2", texte)
+        self.assertNotIn("Expliqué", texte)
 
     def test_menu_eat_refuse_nan_et_inf_avant_le_calcul(self):
         reponses = ["3", "2", "", "", "", "", "nan", "inf", "10", "",
-                    "1", "2", "0", "0"]
+                    "1", "0", "0"]
         resultat = executer(saisie="\n".join(reponses) + "\n")
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
         self.assertEqual(resultat.stdout.count("Saisis un temps fini"), 2)
         self.assertIn("197.50 ns", resultat.stdout)
         self.assertIn("75", resultat.stdout)
-        self.assertIn("Chemin hit : 10 + 100 = 110", resultat.stdout)
-
-    def test_demonstration_expliquee_reste_automatique(self):
-        resultat = executer("demo", "--explain")
-        self.assertEqual(resultat.returncode, 0, resultat.stderr)
-        self.assertIn("File suivante", resultat.stdout)
-        self.assertIn("FIFO choisit la page 7", resultat.stdout)
-        self.assertIn("TLB avant", resultat.stdout)
-        self.assertIn("197.50 ns", resultat.stdout)
-        self.assertNotIn("Entrée : suite", resultat.stdout)
+        self.assertNotIn("Chemin hit", resultat.stdout)
 
     def test_aide_version_et_commandes_secondaires_retirees(self):
         aide = executer("--help")
         self.assertEqual(aide.returncode, 0)
         self.assertIn("demo", aide.stdout)
-        self.assertIn("ESINOS 3.1.0", executer("--version").stdout)
+        self.assertIn("ESINOS 3.2.0", executer("--version").stdout)
+        self.assertNotIn("--explain", aide.stdout)
+        explain = executer("demo", "--explain")
+        self.assertEqual(explain.returncode, 2)
         for commande in ("scheduler", "memory", "translate", "eat", "fs"):
             resultat = executer(commande)
             self.assertEqual(resultat.returncode, 2)

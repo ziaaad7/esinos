@@ -1,9 +1,8 @@
-"""Présentation des résultats : aucune saisie clavier sauf le pas à pas."""
+"""Présentation déterministe des résultats du simulateur."""
 from .scheduler import ordonnancer
 from .memory import remplacer, traduire, calculer_eat, calculer_eat_defauts
 from .filesystem import lister_inodes, etat_disque
-from .affichage import gantt_texte, tableau_texte, explication_cpu
-from .pedagogie import explications_remplacement, explications_traduction
+from .affichage import gantt_texte, tableau_texte
 
 
 def titre(texte):
@@ -11,25 +10,9 @@ def titre(texte):
     print("-" * len(texte))
 
 
-def parcourir_etapes(explications, mode):
-    for explication in explications:
-        print("\n" + explication)
-        if mode == "pasapas":
-            suite = input("Entrée : suite | t : tout afficher | 0 : retour : ")
-            if suite.strip().lower() == "t":
-                mode = "explique"
-            elif suite.strip() == "0":
-                return False
-    return True
-
-
-def afficher_cpu(processus, algorithme, quantum=2, mode="resume"):
+def afficher_cpu(processus, algorithme, quantum=2):
     gantt, lignes = ordonnancer(processus, algorithme, quantum)
     titre(algorithme.upper())
-    if mode != "resume":
-        textes = explication_cpu(processus, gantt, algorithme, quantum)
-        if not parcourir_etapes(textes, mode):
-            return
     print(gantt_texte(gantt))
     print(tableau_texte(
         ("PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Séjour"), lignes
@@ -64,13 +47,9 @@ def comparer_cpu(processus, quantum=2):
     print(f"Round Robin utilise un quantum de {quantum}.")
 
 
-def afficher_remplacement(pages, cadres, algorithme, mode="resume"):
+def afficher_remplacement(pages, cadres, algorithme):
     defauts, trace = remplacer(pages, cadres, algorithme)
     titre(f"{algorithme.upper()} - {cadres} CADRES")
-    if mode != "resume":
-        textes = explications_remplacement(pages, cadres, algorithme, trace)
-        if not parcourir_etapes(textes, mode):
-            return
     lignes = []
     etape = 1
     for page, hit, victime, etat_cadres in trace:
@@ -97,14 +76,10 @@ def comparer_remplacement(pages, cadres):
 
 
 def afficher_traduction(adresses, taille, table, capacite,
-                        temps_tlb=10, temps_memoire=100, mode="resume"):
+                        temps_tlb=10, temps_memoire=100):
     lignes, hits = traduire(adresses, taille, table, capacite)
     eat = calculer_eat(hits, len(lignes), temps_tlb, temps_memoire)
     titre("TRADUCTION, TLB ET EAT")
-    if mode != "resume":
-        textes = explications_traduction(adresses, taille, table, capacite, lignes)
-        if not parcourir_etapes(textes, mode):
-            return
     tableau = []
     for adresse, page, deplacement, cadre, physique, hit in lignes:
         resultat = "miss"
@@ -116,14 +91,6 @@ def afficher_traduction(adresses, taille, table, capacite,
     print(tableau_texte(("Adresse", "Page", "Déplacement", "Cadre", "Physique", "TLB"),
                         tableau))
     print(f"Hits TLB : {hits}/{len(lignes)}")
-    if mode != "resume":
-        taux = hits / len(lignes)
-        print(f"Chemin hit : {temps_tlb:g} + {temps_memoire:g} = "
-              f"{temps_tlb + temps_memoire:g} ns")
-        print(f"Chemin miss : {temps_tlb:g} + 2 x {temps_memoire:g} = "
-              f"{temps_tlb + 2 * temps_memoire:g} ns")
-        print(f"EAT = {taux:.3f} x coût hit + {1 - taux:.3f} x coût miss")
-        print("Le délai de chargement d'une page depuis le disque est exclu.")
     print(f"EAT : {eat:.2f} ns")
 
 

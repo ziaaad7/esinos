@@ -56,7 +56,7 @@ est préparée dans un fichier temporaire, synchronisée, puis publiée en une
 opération. L'initialisation et la copie d'un JSON refusent d'écraser une cible.
 Le reformatage du menu demande confirmation.
 
-Le format binaire reste compatible avec ESINOS 3.0. Les anciens JSON restent
+Le format binaire ne change pas en ESINOS 3.2. Les anciens JSON restent
 lisibles et gardent leur format quand ils sont modifiés. Si seul l'ancien
 data/esinos.disk.json existe, le menu l'ouvre et son choix 10 propose une
 copie .img en conservant l'original.
