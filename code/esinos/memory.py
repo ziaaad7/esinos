@@ -183,23 +183,3 @@ def calculer_eat(hits, acces, temps_tlb=10, temps_memoire=100):
     if not isfinite(resultat):
         raise ValueError("Le résultat EAT doit être fini.")
     return resultat
-
-
-def calculer_eat_defauts(taux_defaut, temps_memoire=100, temps_defaut=1000000):
-    """Calcule l'EAT avec le temps total de traitement d'un défaut."""
-    if type(taux_defaut) is not int and type(taux_defaut) is not float:
-        raise ValueError("Le taux de défaut doit être un nombre.")
-    try:
-        fini = isfinite(taux_defaut)
-    except OverflowError:
-        fini = False
-    if not fini or taux_defaut < 0 or taux_defaut > 1:
-        raise ValueError("Le taux de défaut doit être compris entre 0 et 1.")
-
-    verifier_temps(temps_memoire)
-    verifier_temps(temps_defaut)
-    resultat = ((1 - taux_defaut) * temps_memoire
-                + taux_defaut * temps_defaut)
-    if not isfinite(resultat):
-        raise ValueError("Le résultat EAT doit être fini.")
-    return resultat

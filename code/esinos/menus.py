@@ -5,12 +5,11 @@ from .entrees import lire_processus, lire_avec_defaut, lire_table, liste_entiers
 from .entrees import demander_choix, demander_entier, demander_temps
 from .entrees import demander_liste
 from .sorties import titre, afficher_cpu, comparer_cpu, afficher_remplacement
-from .sorties import comparer_remplacement, afficher_traduction, afficher_eat_defauts
-from .sorties import afficher_fichiers, afficher_inodes, afficher_etat
+from .sorties import comparer_remplacement, afficher_traduction
+from .sorties import afficher_inodes
 from .affichage import tableau_texte
 from .filesystem import initialiser, creer_fichier, lire_fichier
-from .filesystem import supprimer_fichier, reformater, migrer_json, format_disque
-from .carte_disque import carte_blocs, explication_fichier
+from .filesystem import supprimer_fichier
 
 PROCESSUS = "P1:0:7:2,P2:2:4:1,P3:4:1:3,P4:5:4:2"
 PAGES = "7,0,1,2,0,3,0,4,2,3,0,3,2"
@@ -128,31 +127,13 @@ def menu_traduction():
             temps_tlb, temps_memoire = 10, 100
 
 
-def menu_eat_defauts():
-    titre("EAT AVEC DÉFAUTS DE PAGE")
-    print("Un défaut inclut tout son traitement, dans la même unité ns.")
-    while True:
-        taux = demander_temps("Taux de défaut p (0 à 1)", 0.001)
-        if taux <= 1:
-            break
-        print("Le taux doit être compris entre 0 et 1.")
-    memoire = demander_temps("Temps mémoire en ns", 100)
-    defaut = demander_temps("Traitement total d'un défaut en ns", 1000000)
-    afficher_eat_defauts(taux, memoire, defaut)
-
-
 def menu_disque(chemin):
     if not os.path.exists(chemin):
         initialiser(chemin)
     while True:
         titre("SYSTÈME DE FICHIERS À INODES")
-        print("Image :", chemin)
-        print("1 Créer | 2 Lire | 3 Supprimer | 4 Lister | 5 Inodes")
-        print("6 État | 7 Reformater | 8 Carte des blocs | 9 Suivre un fichier")
-        print("10 Copier une ancienne image JSON en binaire")
-        print("0 Retour")
-        choix = demander_choix("Choix", ("0", "1", "2", "3", "4", "5",
-                                        "6", "7", "8", "9", "10"), "4")
+        print("1 Créer | 2 Lire | 3 Supprimer | 4 Table d'inodes | 0 Retour")
+        choix = demander_choix("Choix", ("0", "1", "2", "3", "4"), "4")
         try:
             if choix == "0":
                 return
@@ -161,42 +142,18 @@ def menu_disque(chemin):
                 texte = input("Texte : ")
                 inode = creer_fichier(chemin, nom, texte)
                 print(f"Fichier créé dans l'inode {inode['numero']}.")
-                print(explication_fichier(chemin, nom))
             elif choix == "2":
                 print(lire_fichier(chemin, input("Nom : ").strip()))
             elif choix == "3":
                 nom = input("Nom : ").strip()
-                if input("Supprimer ce fichier ? [oui/non] : ").strip().lower() == "oui":
+                reponse = input("Supprimer ce fichier ? [oui/non] : ")
+                if reponse.strip().lower() == "oui":
                     supprimer_fichier(chemin, nom)
                     print("Fichier supprimé. Ses blocs et son inode sont libres.")
                 else:
                     print("Action annulée.")
-            elif choix == "4":
-                afficher_fichiers(chemin)
-            elif choix == "5":
+            else:
                 afficher_inodes(chemin)
-            elif choix == "6":
-                afficher_etat(chemin)
-            elif choix == "7":
-                reponse = input("Effacer tous les fichiers virtuels ? [oui/non] : ")
-                if reponse.strip().lower() == "oui":
-                    reformater(chemin)
-                    print("Disque reformaté.")
-                else:
-                    print("Action annulée.")
-            elif choix == "8":
-                print(carte_blocs(chemin))
-            elif choix == "9":
-                print(explication_fichier(chemin, input("Nom : ").strip()))
-            elif choix == "10":
-                if format_disque(chemin) == "binaire":
-                    print("Cette image utilise déjà le format binaire.")
-                else:
-                    propose = os.path.splitext(chemin)[0] + ".img"
-                    destination = lire_avec_defaut("Nouveau chemin .img", propose)
-                    migrer_json(chemin, destination)
-                    chemin = destination
-                    print("Copie binaire ouverte. Le JSON original est conservé.")
         except (OSError, ValueError) as erreur:
             print("Erreur :", erreur)
 
@@ -210,19 +167,14 @@ def demonstration():
     comparer_remplacement(pages, 3)
     afficher_traduction(liste_entiers(ADRESSES), 64, lire_table(TABLE), 2)
 
-    afficher_eat_defauts(0.001, 100, 1000000)
-
     with TemporaryDirectory() as dossier:
-        chemin = os.path.join(dossier, "demo.disk.img")
+        chemin = os.path.join(dossier, "demo.disk.json")
         initialiser(chemin, 12, 16, 4)
         creer_fichier(chemin, "notes.txt",
                       "Bonjour depuis le disque virtuel ESINOS.")
         titre("BONUS - INODES ET BLOCS")
         afficher_inodes(chemin)
-        print(explication_fichier(chemin, "notes.txt"))
         print("Lecture :", lire_fichier(chemin, "notes.txt"))
-        print(carte_blocs(chemin))
         supprimer_fichier(chemin, "notes.txt")
         print("Après suppression :")
         afficher_inodes(chemin)
-        print(carte_blocs(chemin))

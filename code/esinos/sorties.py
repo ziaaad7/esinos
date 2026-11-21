@@ -1,13 +1,22 @@
 """Présentation déterministe des résultats du simulateur."""
 from .scheduler import ordonnancer
-from .memory import remplacer, traduire, calculer_eat, calculer_eat_defauts
-from .filesystem import lister_inodes, etat_disque
+from .memory import remplacer, traduire, calculer_eat
+from .filesystem import lister_inodes
 from .affichage import gantt_texte, tableau_texte
 
 
 def titre(texte):
     print("\n" + texte)
     print("-" * len(texte))
+
+
+def moyennes(lignes):
+    attente = 0
+    sejour = 0
+    for ligne in lignes:
+        attente += ligne[5]
+        sejour += ligne[6]
+    return attente / len(lignes), sejour / len(lignes)
 
 
 def afficher_cpu(processus, algorithme, quantum=2):
@@ -17,13 +26,9 @@ def afficher_cpu(processus, algorithme, quantum=2):
     print(tableau_texte(
         ("PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Séjour"), lignes
     ))
-    attente_totale = 0
-    sejour_total = 0
-    for ligne in lignes:
-        attente_totale += ligne[5]
-        sejour_total += ligne[6]
-    print(f"Attente moyenne : {attente_totale / len(lignes):.2f}")
-    print(f"Séjour moyen : {sejour_total / len(lignes):.2f}")
+    attente, sejour = moyennes(lignes)
+    print(f"Attente moyenne : {attente:.2f}")
+    print(f"Séjour moyen : {sejour:.2f}")
 
 
 def comparer_cpu(processus, quantum=2):
@@ -36,13 +41,8 @@ def comparer_cpu(processus, quantum=2):
         print(tableau_texte(
             ("PID", "AT", "BT", "Prio", "Fin (CT)", "Attente", "Séjour"), lignes
         ))
-        attente = 0
-        sejour = 0
-        for ligne in lignes:
-            attente += ligne[5]
-            sejour += ligne[6]
-        resultats.append((algorithme.upper(), f"{attente / len(lignes):.2f}",
-                          f"{sejour / len(lignes):.2f}"))
+        attente, sejour = moyennes(lignes)
+        resultats.append((algorithme.upper(), f"{attente:.2f}", f"{sejour:.2f}"))
     print(tableau_texte(("Algorithme", "Attente moyenne", "Séjour moyen"), resultats))
     print(f"Round Robin utilise un quantum de {quantum}.")
 
@@ -91,7 +91,7 @@ def afficher_traduction(adresses, taille, table, capacite,
     print(tableau_texte(("Adresse", "Page", "Déplacement", "Cadre", "Physique", "TLB"),
                         tableau))
     print(f"Hits TLB : {hits}/{len(lignes)}")
-    print(f"EAT : {eat:.2f} ns")
+    print(f"EAT (TLB, hors chargement disque) : {eat:.2f} ns")
 
 
 def afficher_inodes(chemin):
@@ -105,30 +105,3 @@ def afficher_inodes(chemin):
             lignes.append((inode["numero"], "occupé", inode["nom"],
                            inode["taille"], str(inode["blocs"])))
     print(tableau_texte(("Inode", "État", "Nom", "Octets", "Blocs"), lignes))
-
-
-def afficher_fichiers(chemin):
-    lignes = []
-    for inode in lister_inodes(chemin):
-        if inode is not None:
-            lignes.append((inode["numero"], inode["nom"], inode["taille"],
-                           str(inode["blocs"])))
-    print(tableau_texte(("Inode", "Nom", "Octets", "Blocs"), lignes))
-
-
-def afficher_etat(chemin):
-    etat = etat_disque(chemin)
-    print("Format :", etat["format"])
-    print(f"Blocs de données utilisés : {etat['blocs_utilises']}/{etat['nombre_blocs']}")
-    print(f"Inodes utilisés : {etat['inodes_utilises']}/{etat['nombre_inodes']}")
-    print(f"Taille d'un bloc : {etat['taille_bloc']} octets")
-
-
-def afficher_eat_defauts(taux, temps_memoire=100, temps_defaut=1000000):
-    resultat = calculer_eat_defauts(taux, temps_memoire, temps_defaut)
-    titre("EAT AVEC DÉFAUTS DE PAGE")
-    print("temps_defaut comprend tout le traitement du défaut, en ns.")
-    print("EAT = (1 - p) × temps_mémoire + p × temps_défaut")
-    print(f"p = {taux:g} ; mémoire = {temps_memoire:g} ns ; "
-          f"défaut = {temps_defaut:g} ns")
-    print(f"EAT avec défauts : {resultat:.2f} ns")

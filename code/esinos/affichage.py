@@ -43,39 +43,62 @@ def _ligne(valeurs, largeurs, droite=None):
     return "|" + "|".join(cellules) + "|"
 
 def gantt_texte(gantt, largeur=90):
-    """Renvoie un Gantt encadré, à largeur de case fixe."""
+    """Dessine les durées à l'échelle quand les noms et les bornes tiennent."""
     if not _est_entier(largeur) or largeur < 20:
         raise ValueError("La largeur doit être un entier d'au moins 20.")
     segments = _verifier_gantt(gantt)
     if not segments:
         return "GANTT : vide"
-    largeur_case = 12
+    duree = segments[-1][2] - segments[0][1]
+    unite = (largeur - len(str(segments[-1][2]))) // duree
+    proportionnel = unite > 0
+    largeurs = []
     for nom, debut, fin in segments:
-        largeur_case = max(largeur_case, len(f"{debut} -> {fin}"))
-    colonnes = max(1, (largeur - 1) // (largeur_case + 3))
-    lignes = ["GANTT", "Cases de largeur fixe; bornes = durées exactes."]
-    depart = 0
-    while depart < len(segments):
-        partie = segments[depart:depart + colonnes]
-        depart += len(partie)
+        espace = (fin - debut) * unite
+        if espace < max(len(nom) + 3, len(str(debut)) + 1):
+            proportionnel = False
+        largeurs.append(espace - 3)
+    lignes = ["GANTT"]
+    if proportionnel:
+        lignes.append("Échelle proportionnelle ; nombres = instants exacts.")
         noms = []
-        bornes = []
-        for nom, debut, fin in partie:
-            if len(nom) > largeur_case:
-                nom = nom[:largeur_case - 3] + "..."
+        temps = ""
+        position = 0
+        for nom, debut, fin in segments:
             noms.append(nom)
-            bornes.append(f"{debut} -> {fin}")
-        largeurs = [largeur_case] * len(partie)
+            temps += " " * (position - len(temps)) + str(debut)
+            position += (fin - debut) * unite
+        temps += " " * (position - len(temps)) + str(segments[-1][2])
         bordure = _bordure(largeurs)
-        lignes.append(bordure)
-        lignes.append(_ligne(noms, largeurs))
-        lignes.append(_ligne(bornes, largeurs))
-        lignes.append(bordure)
+        lignes += [bordure, _ligne(noms, largeurs), bordure, temps]
+    else:
+        lignes += ["Schéma non proportionnel.",
+                   "Cases de largeur fixe; bornes = durées exactes."]
+        largeur_case = 12
+        for nom, debut, fin in segments:
+            largeur_case = max(largeur_case, len(f"{debut} -> {fin}"))
+        colonnes = max(1, (largeur - 1) // (largeur_case + 3))
+        depart = 0
+        while depart < len(segments):
+            partie = segments[depart:depart + colonnes]
+            depart += len(partie)
+            noms = []
+            bornes = []
+            for nom, debut, fin in partie:
+                if len(nom) > largeur_case:
+                    nom = nom[:largeur_case - 3] + "..."
+                noms.append(nom)
+                bornes.append(f"{debut} -> {fin}")
+            largeurs = [largeur_case] * len(partie)
+            bordure = _bordure(largeurs)
+            lignes += [bordure, _ligne(noms, largeurs),
+                       _ligne(bornes, largeurs), bordure]
     for nom, debut, fin in segments:
         if nom == "IDLE":
             lignes.append("IDLE = CPU libre entre deux arrivées.")
             break
     return "\n".join(lignes)
+
 
 def tableau_texte(entetes, lignes):
     """Renvoie un tableau ASCII, avec nombres alignés à droite."""

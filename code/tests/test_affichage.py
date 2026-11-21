@@ -34,6 +34,18 @@ class GanttTexteTests(unittest.TestCase):
             if ligne.startswith("+") or ligne.startswith("|"):
                 self.assertLessEqual(len(ligne), 40)
 
+    def test_petites_durees_proportionnelles_et_graduations_exactes(self):
+        texte = gantt_texte([("A", 0, 2), ("B", 2, 3)], largeur=40)
+        self.assertIn("Échelle proportionnelle", texte)
+        bordure = next(ligne for ligne in texte.splitlines() if ligne.startswith("+"))
+        positions = [i for i, lettre in enumerate(bordure) if lettre == "+"]
+        self.assertEqual(positions[1], 2 * (positions[2] - positions[1]))
+        graduations = texte.splitlines()[-1]
+        self.assertEqual(graduations[positions[0]], "0")
+        self.assertEqual(graduations[positions[1]], "2")
+        self.assertEqual(graduations[positions[2]], "3")
+        self.assertTrue(all(len(ligne) <= 40 for ligne in texte.splitlines()[2:]))
+
     def test_gantt_vide_et_tranches_invalides(self):
         self.assertEqual(gantt_texte([]), "GANTT : vide")
         with self.assertRaises(ValueError):

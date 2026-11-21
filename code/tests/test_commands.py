@@ -42,7 +42,8 @@ class CommandTests(unittest.TestCase):
                         "FIFO | 10 | 3", "LRU | 9 | 4", "OPTIMAL | 7 | 6",
                         "75 | 1 | 11 | 2 | 139 | hit", "1/8", "197.50 ns",
                         "notes.txt | 40 | [0, 1, 2]",
-                        "0-11 : ###.........", "0-11 : ............"):
+                        "Lecture : Bonjour depuis le disque virtuel ESINOS.",
+                        "Après suppression :"):
             self.assertIn(attendu, texte)
 
     def test_menu_rr_redemande_un_quantum_valide(self):
@@ -62,7 +63,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(resultat.returncode, 0, resultat.stderr)
         texte = texte_simple(resultat.stdout)
         self.assertIn("IDLE", texte)
-        self.assertIn("3 -> 5", texte)
+        self.assertIn("A | 3 | 2 | 2 | 5 | 0 | 2", texte)
         self.assertIn("B | 4 | 1 | 1 | 6 | 1 | 2", texte)
         self.assertIn("FCFS | 0.50 | 2.00", texte)
 
@@ -89,7 +90,7 @@ class CommandTests(unittest.TestCase):
         aide = executer("--help")
         self.assertEqual(aide.returncode, 0)
         self.assertIn("demo", aide.stdout)
-        self.assertIn("ESINOS 3.2.0", executer("--version").stdout)
+        self.assertIn("ESINOS 3.3.0", executer("--version").stdout)
         self.assertNotIn("--explain", aide.stdout)
         explain = executer("demo", "--explain")
         self.assertEqual(explain.returncode, 2)
@@ -98,12 +99,6 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(resultat.returncode, 2)
             self.assertNotIn("Traceback", resultat.stderr)
 
-    def test_menu_eat_defauts_redemande_un_taux_valide(self):
-        saisie = "6\n1.2\nnan\n0.001\n100\n1000000\n0\n"
-        resultat = executer(saisie=saisie)
-        self.assertEqual(resultat.returncode, 0, resultat.stderr)
-        self.assertIn("Le taux doit être compris entre 0 et 1", resultat.stdout)
-        self.assertIn("1099.90 ns", resultat.stdout)
 
 
 if __name__ == "__main__":

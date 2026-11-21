@@ -9,7 +9,7 @@ CODE = Path(__file__).resolve().parents[1]
 if str(CODE) not in sys.path:
     sys.path.insert(0, str(CODE))
 
-from esinos.cli import lire_processus
+from esinos.entrees import lire_processus
 from esinos.memory import calculer_eat, remplacer, traduire
 from esinos.scheduler import ordonnancer
 

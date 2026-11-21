@@ -1,98 +1,137 @@
-"""Fichiers à inodes, lecture des images et publication atomique."""
-import base64
+"""Mini système de fichiers persistant : blocs, inodes et un fichier JSON."""
+
 import json
 import os
-import re
 import tempfile
-from .disque_binaire import MAGIC, encoder, decoder, geometrie, verifier
 
-SCHEMA = "esinos-mini-filesystem"
-NOM_SIMPLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-TAILLE_MAX_IMAGE = 64 * 1024 * 1024
+
+MAX_BLOCS = 65536
+MAX_INODES = 4096
+MAX_TAILLE_BLOC = 65536
+MAX_DONNEES = 64 * 1024 * 1024
+
+
+def _entier(valeur, nom, minimum, maximum):
+    if isinstance(valeur, bool) or not isinstance(valeur, int):
+        raise ValueError(nom + " doit être un entier.")
+    if valeur < minimum or valeur > maximum:
+        raise ValueError(nom + " est hors limites.")
 
 
 def _verifier_nom(nom):
-    if not isinstance(nom, str) or NOM_SIMPLE.fullmatch(nom) is None:
-        raise ValueError("Nom invalide : 1 à 64 lettres, chiffres, points, _ ou -.")
+    if not isinstance(nom, str) or nom == "" or "\x00" in nom:
+        raise ValueError("Nom de fichier invalide.")
+    if len(nom.encode("utf-8")) > 64:
+        raise ValueError("Le nom de fichier dépasse 64 octets UTF-8.")
 
 
 def _valider(disque):
-    disque = verifier(disque)
-    for inode in disque["inodes"]:
-        if inode is not None:
-            _verifier_nom(inode["nom"])
-    return disque
+    """Vérifie les liens inode -> blocs puis renvoie une copie simple."""
+    if not isinstance(disque, dict):
+        raise ValueError("Le disque doit être un dictionnaire.")
+    for cle in ("taille_bloc", "blocs", "inodes"):
+        if cle not in disque:
+            raise ValueError("Il manque " + cle + " dans le disque.")
+    taille_bloc = disque["taille_bloc"]
+    blocs = disque["blocs"]
+    inodes = disque["inodes"]
+    _entier(taille_bloc, "La taille de bloc", 1, MAX_TAILLE_BLOC)
+    if not isinstance(blocs, list) or not isinstance(inodes, list):
+        raise ValueError("Les blocs et les inodes doivent être des listes.")
+    _entier(len(blocs), "Le nombre de blocs", 1, MAX_BLOCS)
+    _entier(len(inodes), "Le nombre d'inodes", 1, MAX_INODES)
+    if taille_bloc * len(blocs) > MAX_DONNEES:
+        raise ValueError("La capacité du disque dépasse 64 Mio.")
 
+    blocs_valides = [None] * len(blocs)
+    for numero in range(len(blocs)):
+        bloc = blocs[numero]
+        if bloc is None:
+            continue
+        if not isinstance(bloc, list) or not bloc or len(bloc) > taille_bloc:
+            raise ValueError("Un bloc occupé est invalide.")
+        copie = []
+        for octet in bloc:
+            _entier(octet, "Un octet", 0, 255)
+            copie.append(octet)
+        blocs_valides[numero] = copie
 
-def _depuis_json(image):
-    """Les deux anciens JSON sont convertis vers le même modèle en mémoire."""
-    try:
-        if image.get("schema") == SCHEMA and image.get("version") == 1:
-            blocs = image["blocks"]
-            nombre = image["max_inodes"]
-            if type(nombre) is not int or not 1 <= nombre <= 4096:
-                raise ValueError("Nombre d'inodes invalide.")
-            if type(image["block_count"]) is not int:
-                raise ValueError("Le nombre de blocs doit être entier.")
-            if not isinstance(blocs, list) or len(blocs) != image["block_count"]:
-                raise ValueError("Nombre de blocs incohérent.")
-            disque = {"taille_bloc": image["block_size"],
-                      "blocs": blocs, "inodes": [None] * nombre}
-            for inode in image["inodes"]:
-                numero = inode["inode_id"]
-                if type(numero) is not int or not 1 <= numero <= nombre:
-                    raise ValueError("Numéro d'inode invalide.")
-                if disque["inodes"][numero - 1] is not None:
-                    raise ValueError("Numéro d'inode déjà utilisé.")
-                disque["inodes"][numero - 1] = {
-                    "numero": numero, "nom": inode["name"],
-                    "taille": inode["size"], "blocs": inode["blocks"],
-                }
-        elif "taille_bloc" in image:
-            blocs = []
-            for morceau in image["blocs"]:
-                if morceau is not None:
-                    morceau = base64.b64encode(bytes.fromhex(morceau)).decode("ascii")
-                blocs.append(morceau)
-            disque = {"taille_bloc": image["taille_bloc"],
-                      "blocs": blocs, "inodes": image["inodes"]}
-        else:
-            raise ValueError("Format JSON ESINOS inconnu.")
-        return _valider(disque)
-    except (KeyError, TypeError, AttributeError) as erreur:
-        raise ValueError("Image JSON invalide : " + str(erreur))
+    proprietaires = [-1] * len(blocs)
+    noms = []
+    inodes_valides = [None] * len(inodes)
+    for position in range(len(inodes)):
+        inode = inodes[position]
+        if inode is None:
+            continue
+        if not isinstance(inode, dict):
+            raise ValueError("Un inode doit être un dictionnaire ou None.")
+        for cle in ("numero", "nom", "taille", "blocs"):
+            if cle not in inode:
+                raise ValueError("Il manque " + cle + " dans un inode.")
+        _entier(inode["numero"], "Le numéro d'inode", 1, len(inodes))
+        if inode["numero"] != position + 1:
+            raise ValueError("Le numéro d'inode ne correspond pas à sa case.")
+        _verifier_nom(inode["nom"])
+        if inode["nom"] in noms:
+            raise ValueError("Deux inodes utilisent le même nom.")
+        noms.append(inode["nom"])
+        _entier(inode["taille"], "La taille d'un fichier", 0,
+                taille_bloc * len(blocs))
+        references = inode["blocs"]
+        if not isinstance(references, list):
+            raise ValueError("La liste de blocs d'un inode est invalide.")
+        attendu = (inode["taille"] + taille_bloc - 1) // taille_bloc
+        if len(references) != attendu:
+            raise ValueError("Le nombre de blocs ne correspond pas à la taille.")
 
+        morceaux = []
+        pointeurs = []
+        for ordre in range(len(references)):
+            numero = references[ordre]
+            _entier(numero, "Le numéro de bloc", 0, len(blocs) - 1)
+            if proprietaires[numero] != -1:
+                raise ValueError("Un bloc appartient à plusieurs inodes.")
+            bloc = blocs_valides[numero]
+            if bloc is None:
+                raise ValueError("Un inode pointe vers un bloc libre.")
+            if ordre + 1 < len(references) and len(bloc) != taille_bloc:
+                raise ValueError("Seul le dernier bloc peut être incomplet.")
+            proprietaires[numero] = position
+            pointeurs.append(numero)
+            morceaux.extend(bloc)
+        if len(morceaux) != inode["taille"]:
+            raise ValueError("La taille du fichier ne correspond pas à ses blocs.")
+        try:
+            bytes(morceaux).decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("Le contenu d'un fichier n'est pas du texte UTF-8.")
+        inodes_valides[position] = {
+            "numero": position + 1,
+            "nom": inode["nom"],
+            "taille": inode["taille"],
+            "blocs": pointeurs,
+        }
 
-def format_disque(chemin):
-    with open(chemin, "rb") as fichier:
-        return "binaire" if fichier.read(len(MAGIC)) == MAGIC else "json"
-
-
-def charger(chemin):
-    """Charge le binaire actuel ou un ancien JSON, sans modifier le fichier."""
-    with open(chemin, "rb") as fichier:
-        contenu = fichier.read(TAILLE_MAX_IMAGE + 1)
-    if len(contenu) > TAILLE_MAX_IMAGE:
-        raise ValueError("L'image dépasse 64 Mio.")
-    if contenu.startswith(MAGIC):
-        return _valider(decoder(contenu))
-    try:
-        image = json.loads(contenu.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError):
-        raise ValueError("Image disque illisible.")
-    if not isinstance(image, dict):
-        raise ValueError("L'image JSON doit être un dictionnaire.")
-    return _depuis_json(image)
+    for numero in range(len(blocs)):
+        if blocs_valides[numero] is not None and proprietaires[numero] == -1:
+            raise ValueError("Un bloc occupé n'est référencé par aucun inode.")
+    return {
+        "taille_bloc": taille_bloc,
+        "blocs": blocs_valides,
+        "inodes": inodes_valides,
+    }
 
 
 def _ecrire(chemin, contenu, nouveau=False):
-    """Écrit une image complète puis la publie, avec création exclusive si demandée."""
-    destination = os.path.abspath(str(chemin))
+    """Publie un JSON complet, sans remplacer une image neuve existante."""
+    destination = os.path.abspath(os.fspath(chemin))
     dossier = os.path.dirname(destination)
     os.makedirs(dossier, exist_ok=True)
-    fd, temporaire = tempfile.mkstemp(prefix=".esinos.", suffix=".tmp", dir=dossier)
+    descripteur, temporaire = tempfile.mkstemp(
+        prefix=".esinos.", suffix=".tmp", dir=dossier
+    )
     try:
-        with os.fdopen(fd, "wb") as fichier:
+        with os.fdopen(descripteur, "wb") as fichier:
             fichier.write(contenu)
             fichier.flush()
             os.fsync(fichier.fileno())
@@ -108,40 +147,38 @@ def _ecrire(chemin, contenu, nouveau=False):
 
 
 def sauvegarder(chemin, disque):
+    """Valide le modèle avant de remplacer atomiquement son fichier JSON."""
     disque = _valider(disque)
-    if format_disque(chemin) == "binaire":
-        contenu = encoder(disque)
-    else:
-        inodes = []
-        for inode in disque["inodes"]:
-            if inode is not None:
-                inodes.append({"inode_id": inode["numero"], "name": inode["nom"],
-                               "size": inode["taille"], "blocks": inode["blocs"]})
-        image = {"schema": SCHEMA, "version": 1,
-                 "block_size": disque["taille_bloc"], "block_count": len(disque["blocs"]),
-                 "max_inodes": len(disque["inodes"]), "blocks": disque["blocs"],
-                 "inodes": inodes}
-        contenu = (json.dumps(image, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-    _ecrire(chemin, contenu)
+    texte = json.dumps(disque, ensure_ascii=False, indent=2) + "\n"
+    _ecrire(chemin, texte.encode("utf-8"))
 
 
 def initialiser(chemin, nombre_blocs=64, taille_bloc=64, nombre_inodes=16):
-    for valeur, limite in ((nombre_blocs, 65536), (taille_bloc, 65536),
-                           (nombre_inodes, 4096)):
-        if type(valeur) is not int or not 1 <= valeur <= limite:
-            raise ValueError("Géométrie du disque invalide.")
-    disque = {"taille_bloc": taille_bloc, "blocs": [None] * nombre_blocs,
-              "inodes": [None] * nombre_inodes}
-    _ecrire(chemin, encoder(disque), nouveau=True)
+    """Crée une image vide exclusivement, pour ne jamais l'écraser par erreur."""
+    _entier(nombre_blocs, "Le nombre de blocs", 1, MAX_BLOCS)
+    _entier(taille_bloc, "La taille de bloc", 1, MAX_TAILLE_BLOC)
+    _entier(nombre_inodes, "Le nombre d'inodes", 1, MAX_INODES)
+    if taille_bloc * nombre_blocs > MAX_DONNEES:
+        raise ValueError("La capacité du disque dépasse 64 Mio.")
+    disque = {
+        "taille_bloc": taille_bloc,
+        "blocs": [None] * nombre_blocs,
+        "inodes": [None] * nombre_inodes,
+    }
+    disque = _valider(disque)
+    texte = json.dumps(disque, ensure_ascii=False, indent=2) + "\n"
+    _ecrire(chemin, texte.encode("utf-8"), nouveau=True)
     return disque
 
 
-def migrer_json(source, destination):
-    if format_disque(source) != "json":
-        raise ValueError("La source doit être une image JSON.")
-    disque = charger(source)
-    _ecrire(destination, encoder(disque), nouveau=True)
-    return disque
+def charger(chemin):
+    """Lit une image JSON française sans la modifier."""
+    try:
+        with open(chemin, "r", encoding="utf-8") as fichier:
+            disque = json.load(fichier)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ValueError("Image disque illisible : " + str(erreur))
+    return _valider(disque)
 
 
 def chercher_inode(disque, nom):
@@ -152,6 +189,7 @@ def chercher_inode(disque, nom):
 
 
 def creer_fichier(chemin, nom, texte):
+    """Encode le texte UTF-8, prend les premiers blocs libres et crée un inode."""
     _verifier_nom(nom)
     if not isinstance(texte, str):
         raise ValueError("Le contenu doit être du texte.")
@@ -160,35 +198,42 @@ def creer_fichier(chemin, nom, texte):
         raise ValueError("Ce nom existe déjà.")
     if None not in disque["inodes"]:
         raise ValueError("La table d'inodes est pleine.")
-    contenu = texte.encode("utf-8")
+    contenu = list(texte.encode("utf-8"))
     taille_bloc = disque["taille_bloc"]
-    nombre = (len(contenu) + taille_bloc - 1) // taille_bloc
+    besoin = (len(contenu) + taille_bloc - 1) // taille_bloc
     libres = []
-    for numero, bloc in enumerate(disque["blocs"]):
-        if bloc is None:
+    for numero in range(len(disque["blocs"])):
+        if disque["blocs"][numero] is None:
             libres.append(numero)
-    if nombre > len(libres):
+    if besoin > len(libres):
         raise ValueError("Le disque manque de blocs libres.")
-    numeros = libres[:nombre]
-    for position, numero in enumerate(numeros):
-        morceau = contenu[position * taille_bloc:(position + 1) * taille_bloc]
-        disque["blocs"][numero] = base64.b64encode(morceau).decode("ascii")
-    place = disque["inodes"].index(None)
-    inode = {"numero": place + 1, "nom": nom, "taille": len(contenu), "blocs": numeros}
-    disque["inodes"][place] = inode
+
+    pointeurs = libres[:besoin]
+    for ordre in range(len(pointeurs)):
+        debut = ordre * taille_bloc
+        disque["blocs"][pointeurs[ordre]] = contenu[debut:debut + taille_bloc]
+    position = disque["inodes"].index(None)
+    inode = {
+        "numero": position + 1,
+        "nom": nom,
+        "taille": len(contenu),
+        "blocs": pointeurs,
+    }
+    disque["inodes"][position] = inode
     sauvegarder(chemin, disque)
     return inode
 
 
 def lire_fichier(chemin, nom):
+    """Assemble les octets de tous les blocs avant le décodage UTF-8."""
     disque = charger(chemin)
     inode = chercher_inode(disque, nom)
     if inode is None:
         raise ValueError("Fichier introuvable : " + str(nom))
-    contenu = b""
+    contenu = []
     for numero in inode["blocs"]:
-        contenu += base64.b64decode(disque["blocs"][numero])
-    return contenu.decode("utf-8")
+        contenu.extend(disque["blocs"][numero])
+    return bytes(contenu).decode("utf-8")
 
 
 def supprimer_fichier(chemin, nom):
@@ -204,25 +249,3 @@ def supprimer_fichier(chemin, nom):
 
 def lister_inodes(chemin):
     return charger(chemin)["inodes"]
-
-
-def etat_disque(chemin):
-    disque = charger(chemin)
-    blocs = disque["blocs"]
-    inodes = disque["inodes"]
-    format_image = format_disque(chemin)
-    return {"format": format_image,
-            "geometrie": geometrie(disque) if format_image == "binaire" else None,
-            "taille_bloc": disque["taille_bloc"], "nombre_blocs": len(blocs),
-            "blocs_utilises": len(blocs) - blocs.count(None),
-            "blocs_libres": blocs.count(None), "nombre_inodes": len(inodes),
-            "inodes_utilises": len(inodes) - inodes.count(None),
-            "inodes_libres": inodes.count(None)}
-
-
-def reformater(chemin):
-    disque = charger(chemin)
-    disque["blocs"] = [None] * len(disque["blocs"])
-    disque["inodes"] = [None] * len(disque["inodes"])
-    sauvegarder(chemin, disque)
-    return disque

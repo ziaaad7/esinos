@@ -16,7 +16,7 @@ CODE = Path(__file__).resolve().parents[1]
 if str(CODE) not in sys.path:
     sys.path.insert(0, str(CODE))
 
-from esinos.memory import calculer_eat, calculer_eat_defauts, remplacer, traduire
+from esinos.memory import calculer_eat, remplacer, traduire
 from esinos.scheduler import ordonnancer
 
 
@@ -472,12 +472,9 @@ class TraductionProprietesTests(unittest.TestCase):
                     traduire(adresses, taille, table, capacite)
 
         self.assertEqual(calculer_eat(1, 8), 197.5)
-        self.assertEqual(calculer_eat_defauts(0.1, 100, 1000), 190.0)
         for appel in (
             (calculer_eat, (True, 1)),
             (calculer_eat, (0, 1, math.inf, 100)),
-            (calculer_eat_defauts, (True,)),
-            (calculer_eat_defauts, (0.5, -1)),
         ):
             fonction, arguments = appel
             with self.subTest(fonction=fonction.__name__, arguments=arguments):
