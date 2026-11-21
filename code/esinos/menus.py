@@ -68,7 +68,7 @@ def menu_remplacement():
     pages = liste_entiers(PAGES)
     cadres = 3
     while True:
-        titre("REMPLACEMENT DE PAGES")
+        titre("GESTIONNAIRE MÉMOIRE")
         print("Références :", pages)
         print("Nombre de cadres :", cadres)
         print("1 FIFO | 2 LRU | 3 Optimal | 4 Comparer")

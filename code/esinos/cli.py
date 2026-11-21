@@ -21,7 +21,7 @@ def menu():
     while True:
         titre("ESINOS - MINI-NOYAU SIMULÉ")
         print("1 Ordonnancement CPU")
-        print("2 Remplacement de pages")
+        print("2 Gestionnaire mémoire")
         print("3 Traduction, TLB et EAT")
         print("4 Système de fichiers à inodes")
         print("5 Démonstration | 0 Quitter")
